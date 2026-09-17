@@ -1,0 +1,29 @@
+; Engine configuration file.
+; AbyssScav EPIC A-01 foundation. Requires Godot 4.7.2 stable (.NET build). Do not downgrade.
+
+config_version=5
+
+[application]
+
+config/name="AbyssScav"
+config/description="Abyssal scavenging co-op foundation (EPIC A-01 bootstrap)."
+run/main_scene="res://scenes/boot.tscn"
+config/features=PackedStringArray("4.7", "C#", "Forward Plus")
+boot_splash/bg_color=Color(0.01, 0.03, 0.06, 1)
+
+[dotnet]
+
+project/assembly_name="AbyssScav"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/mode=0
+window/size/resizable=true
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="forward_plus"
+environment/defaults/default_clear_color=Color(0.01, 0.03, 0.06, 1)

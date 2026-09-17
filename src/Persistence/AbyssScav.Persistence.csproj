@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>AbyssScav.Persistence</AssemblyName>
+    <RootNamespace>AbyssScav.Persistence</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!-- Engine-independent only: this project must never reference GodotSharp. -->
+  </PropertyGroup>
+
+</Project>

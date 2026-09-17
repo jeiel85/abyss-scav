@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "game_version": "0.9.0-rc1",
+  "run_seed": 1844674407370955,
+  "biome_id": "B02",
+  "contract_id": "contract.blackbox.01",
+  "difficulty": "Standard",
+  "layout_hash": "sha256:EXAMPLE",
+  "catalog_hash": "sha256:EXAMPLE",
+  "modifiers": ["severe_current"]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "module.sonar.whisper_pulse",
+  "category": "Sonar",
+  "tier": 2,
+  "display_name_key": "MODULE_WHISPER_PULSE_NAME",
+  "description_key": "MODULE_WHISPER_PULSE_DESC",
+  "power_idle": 2.0,
+  "power_active": 14.0,
+  "noise_multiplier": 0.55,
+  "cooldown_seconds": 7.5,
+  "tags": ["sonar", "stealth"],
+  "unlock": {"research_branch": "Navigation", "cost": 120}
+}

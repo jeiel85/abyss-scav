@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <AssemblyName>AbyssScav.Domain.Tests</AssemblyName>
+    <RootNamespace>AbyssScav.Domain.Tests</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!-- No external test packages: offline-safe console runner invoked via `dotnet run`. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Domain\AbyssScav.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

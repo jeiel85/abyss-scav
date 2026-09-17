@@ -1,0 +1,1118 @@
+using AbyssScav.App;
+using AbyssScav.Domain;
+using AbyssScav.Foundation;
+using AbyssScav.Infra.Logging;
+using AbyssScav.Persistence;
+using AbyssScav.Presentation;
+using Godot;
+using SysVec = System.Numerics.Vector3;
+
+namespace AbyssScav.Gameplay;
+
+/// <summary>
+/// Solo run scene root: owns catalog → generate → validate → simulate, builds
+/// physical corridors faithfully from the world, ticks the domain sim with the
+/// Godot ship pose every physics frame, and drives HUD/sonar/audio/settlement.
+/// Mission fail, pause/abort, and honest settlement persistence included.
+/// </summary>
+public partial class RunController : Node3D
+{
+    private ContentCatalog? _catalog;
+    private GeneratedWorld? _world;
+    private RunSimulation? _sim;
+    private RunLaunchOptions? _options;
+    private SubmarineController? _sub;
+    private RunHud? _hud;
+    private ProceduralAudio? _audio;
+    private FileSaveStore? _store;
+    private TutorialDirector? _director;
+    private SonarBuddy? _buddy;
+    private bool _isTutorial;
+    private bool _tutorialSaveUsable = true;
+    private string _tutorialEndNote = "";
+    private bool _trainingBreachDone;
+
+    private bool _quiet;
+    private bool _paused;
+    private bool _ended;
+    private bool _buildReady;
+    private RunSettlementDraft? _pendingDraft;
+    private readonly HashSet<string> _tutorialPendingSteps = new(StringComparer.Ordinal);
+    private bool _tutorialExtractionObserved;
+    private CancellationTokenSource? _settleCts;
+    private bool _settleInFlight;
+    private string _saveState = "";
+    private readonly Dictionary<string, MeshInstance3D> _threatMarkers = new();
+    private readonly Dictionary<string, MeshInstance3D> _lootMarkers = new();
+    private IReadOnlyList<ContactSnapshot> _lastPulseContacts = Array.Empty<ContactSnapshot>();
+    private readonly HashSet<string> _surveyedCreatureIds = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _salvagedTraitIds = new(StringComparer.Ordinal);
+    private float _statusPoll;
+    private Label? _fatalLabel;
+
+    public override void _Ready()
+    {
+        AbyssInput.EnsureRegistered();
+        if (!GameServices.IsInitialized)
+        {
+            ShowFatal("Boot services unavailable. Return to menu and relaunch.");
+            return;
+        }
+        _store = new FileSaveStore(GameServices.Paths.SavesDir);
+        _audio = new ProceduralAudio();
+        AddChild(_audio);
+
+        if (!ContentCatalog.TryBuild(out var catalog, out var errors) || catalog is null)
+        {
+            ShowFatal("Content catalog failed: " + string.Join("; ", errors));
+            return;
+        }
+        _catalog = catalog;
+        _options = RunLaunchContext.Pending ?? RunLaunchOptions.DefaultFromCatalog(catalog);
+        RunLaunchContext.Pending = null;
+        if (!_options.TryValidate(catalog, out var problems))
+        {
+            ShowFatal("Launch selection invalid: " + string.Join("; ", problems));
+            return;
+        }
+        // Fresh ownership at run start: a module-equipped production launch
+        // must verify against the live profile (never a snapshot, never a null
+        // skip-gate). Stock loadouts skip the gate exactly as before.
+        if (_options.EffectiveModuleIds.Count > 0)
+        {
+            _hud?.ShowMessage("Verifying module ownership…", 3f);
+            VerifyOwnershipAndBuildAsync();
+            return;
+        }
+        BuildRun(ownedForGate: null);
+    }
+
+    /// <summary>
+    /// Async-safe ownership gate: loads the actual live profile on a worker,
+    /// then continues the build on the main thread. Missing/unowned modules
+    /// fail explicitly; the snapshot on the launch options is never trusted.
+    /// </summary>
+    private async void VerifyOwnershipAndBuildAsync()
+    {
+        var options = _options;
+        var catalog = _catalog;
+        var store = _store;
+        if (options is null || catalog is null || store is null) return;
+        var moduleIds = options.EffectiveModuleIds.ToArray();
+        ProfileSave live;
+        try
+        {
+            live = await store.LoadAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (SaveException ex)
+        {
+            if (!IsInstanceValid(this)) return;
+            ShowFatal($"Module loadout cannot be verified: profile unreadable [{ex.Code}]: {ex.Message}");
+            return;
+        }
+        catch (Exception ex)
+        {
+            if (!IsInstanceValid(this)) return;
+            ShowFatal($"Module loadout cannot be verified: profile unreadable ({ex.GetType().Name}).");
+            return;
+        }
+        if (!IsInstanceValid(this) || _ended) return;
+        var owned = new HashSet<string>(live.Unlocks.Blueprints, StringComparer.Ordinal);
+        if (!ModuleLoadout.TryValidate(moduleIds, catalog, owned, out var modErrors))
+        {
+            ShowFatal("Module loadout refused at run start: " + string.Join("; ", modErrors));
+            return;
+        }
+        BuildRun(ownedForGate: owned);
+    }
+
+    /// <summary>World + sim + scene construction. Runs once per launch.</summary>
+    private void BuildRun(IReadOnlyCollection<string>? ownedForGate)
+    {
+        if (_buildReady || _ended) return;
+        var catalog = _catalog;
+        var options = _options;
+        if (catalog is null || options is null) return;
+        // A module-equipped launch must carry live ownership into the gate:
+        // null here would silently skip it, so fail closed instead.
+        IReadOnlyCollection<string>? gate = options.EffectiveModuleIds.Count > 0
+            ? ownedForGate ?? throw new InvalidOperationException("Live module ownership is required for an equipped launch.")
+            : options.EffectiveOwnedBlueprints;
+        if (options.EffectiveModuleIds.Count > 0 && gate is null)
+        {
+            ShowFatal("Module loadout refused at run start: live ownership unavailable.");
+            return;
+        }
+        _buildReady = true;
+        var request = new RunGenerationRequest(options.RunSeed, options.BiomeId, options.ContractId, catalog);
+        if (!TrenchGenerator.TryGenerate(request, out var world, out var verdict, out var reason) || world is null)
+        {
+            ShowFatal("Generation refused: " + reason);
+            return;
+        }
+        if (!verdict.IsValid)
+        {
+            ShowFatal("World invalid: " + string.Join("; ", verdict.Errors));
+            return;
+        }
+        _world = world;
+        _isTutorial = options.IsTutorial;
+        if (!RunSimulation.TryCreate(world, catalog, options.DifficultyId, options.FrameId,
+                options.ModifierIds, options.InsuranceId, out var sim, out var simReason,
+                options.EffectiveModuleIds, gate, options.IsTutorial) || sim is null)
+        {
+            ShowFatal("Run rejected: " + simReason);
+            return;
+        }
+        _sim = sim;
+        sim.EventRaised += OnSimEvent;
+
+        WorldBuilder.Build(this, world, catalog);
+        SpawnSub(world);
+        BuildHud();
+        BuildBuddy();
+        if (_isTutorial)
+        {
+            BuildTutorial();
+        }
+        // Flow bookkeeping: RunLoading -> InRun once the scene is constructed.
+        GameServices.Flow.TryTransition(AppScene.InRun, out _);
+        _hud?.ShowMessage($"Dive live: {catalog.Contracts[world.ContractId].Archetype} in {catalog.Biomes[world.BiomeId].DisplayName}. Follow cyan landmarks; F to ping.", 7f);
+        if (_isTutorial)
+        {
+            _hud?.ShowMessage("Tutorial: The First Ping — follow the top-left checklist. Dock (J), drill (H), and repair (R) are mandatory; optional steps can skip.", 8f);
+        }
+        GodotLogBridge.Info(GameServices.Logger, $"Run started seed={world.RunSeed} biome={world.BiomeId} contract={world.ContractId} nodes={world.Nodes.Count}.");
+    }
+
+    private void SpawnSub(GeneratedWorld world)
+    {
+        _sub = new SubmarineController { Name = "Submarine", QuietMode = _quiet };
+        // Physical thrust follows the domain loadout (quiet prop x0.85); the
+        // quiet-running cap in the controller still applies on top.
+        _sub.ThrustMultiplier = _sim?.EngineThrustMultiplier ?? 1f;
+        AddChild(_sub);
+        var start = WorldBuilder.ToG(world.GetNode(world.ExtractionNodeId).Position);
+        _sub.GlobalPosition = start + new Vector3(0f, 2f, 12f);
+        // Face along the first route leg so the player starts oriented.
+        var dest = start;
+        if (world.RouteFromExtractionToObjective.Count >= 2)
+        {
+            dest = WorldBuilder.ToG(world.GetNode(world.RouteFromExtractionToObjective[1]).Position);
+        }
+        var look = dest - _sub.GlobalPosition;
+        if (look.Length() > 1f)
+        {
+            _sub.LookAt(_sub.GlobalPosition + look, Vector3.Up);
+        }
+        _sub.BodyEntered += OnHullBump;
+        CacheMarkers(world);
+    }
+
+    private void CacheMarkers(GeneratedWorld world)
+    {
+        foreach (var l in world.LootSpawns)
+        {
+            var node = GetNodeOrNull<MeshInstance3D>("Loot_" + l.SpawnId.Replace('.', '_'));
+            if (node is not null) _lootMarkers[l.SpawnId] = node;
+        }
+    }
+
+    private void OnHullBump(Node body)
+    {
+        // Hull scrape: small honest feedback, domain damage stays with creatures/pressure.
+        _hud?.ShowMessage("Hull scrape — corridor wall. Ease off the thrust.", 2.5f);
+        _audio?.PlayClunk();
+    }
+
+    private void BuildHud()
+    {
+        _hud = new RunHud { Name = "RunHud" };
+        AddChild(_hud);
+        // Defer one frame so RunHud._Ready built Sonar.
+        _hud.ResumeRequested += () => SetPaused(false);
+        _hud.AbortRequested += AbortToMenu;
+        _hud.RetrySaveRequested += () => RetrySettlementAsync();
+        _hud.BuddyToggled += on =>
+        {
+            if (_buddy is not null) _buddy.Enabled = on;
+            _hud?.ShowMessage(on ? "Sonar buddy on." : "Sonar buddy off — instruments only.", 2.5f);
+        };
+        _audio?.ApplyVolume(GameServices.Settings.MasterVolumePercent);
+    }
+
+    /// <summary>
+    /// Solo-only buddy: every run is solo, so the buddy ships in every run
+    /// (default ON, pause-menu toggleable). The tutorial director is separate.
+    /// Buddy blips reuse ProceduralAudio.PlayTick (short chirp); breach/threat
+    /// alarms stay event-driven so alerts are never audio-only.
+    /// </summary>
+    private void BuildBuddy()
+    {
+        _buddy = new SonarBuddy { Name = "SonarBuddy" };
+        AddChild(_buddy);
+        _buddy.CalloutRaised += (text, critical) =>
+        {
+            _hud?.ShowBuddyCallout(text, critical);
+            _audio?.PlayTick();
+        };
+    }
+
+    private void BuildTutorial()
+    {
+        _director = new TutorialDirector { Name = "TutorialDirector" };
+        AddChild(_director);
+        _director.Setup(Array.Empty<string>());
+        _director.StepCompleted += OnTutorialStep;
+        LoadTutorialStateAsync();
+    }
+
+    private async void LoadTutorialStateAsync()
+    {
+        if (_store is null || _director is null) return;
+        // Reads stay allowed in every mode (including the unsaved session and
+        // safe-mode, which only overrides config): resume from real progress.
+        try
+        {
+            var profile = await _store.LoadAsync(CancellationToken.None);
+            if (!IsInstanceValid(this) || _director is null) return;
+            _director.Setup(profile.Tutorial.CompletedSteps ?? new List<string>());
+            if (profile.Tutorial.Completed && _hud is not null && IsInstanceValid(_hud))
+            {
+                _hud.ShowMessage("Tutorial replay — steps already logged; checklist resumes complete.", 5f);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (SaveException ex)
+        {
+            if (!IsInstanceValid(this)) return;
+            _tutorialSaveUsable = false;
+            _hud?.ShowMessage($"Tutorial progress cannot be saved [{ex.Code}]: the run continues, steps just will not persist.", 6f);
+        }
+        catch (Exception ex)
+        {
+            if (!IsInstanceValid(this)) return;
+            _tutorialSaveUsable = false;
+            _hud?.ShowMessage($"Tutorial progress cannot be saved ({ex.GetType().Name}): the run continues.", 6f);
+        }
+    }
+
+    /// <summary>
+    /// Step handler retains the step in memory only. The single file write is
+    /// held until finish (extraction): steps retry next tutorial launch when
+    /// the run ends without extraction, with no timeout fake-claim.
+    /// </summary>
+    private void OnTutorialStep(string stepId)
+    {
+        _tutorialPendingSteps.Add(stepId);
+    }
+
+    /// <summary>
+    /// Single held tutorial write at finish. All Node reads happen on the main
+    /// thread BEFORE the worker callback: the callback only unions captured
+    /// step IDs and the captured extraction flag. Completed persists only when
+    /// every expected step ID is unioned AND a real extraction was observed —
+    /// a skipped extract never counts as completion. Errors are reported
+    /// visibly and the caller must not show success text when unwritten.
+    /// Returns true when the completion state was persisted.
+    /// </summary>
+    private async Task<bool> PersistTutorialCompletionAsync(CancellationToken ct)
+    {
+        if (_store is null || _director is null || !_tutorialSaveUsable) return false;
+        if (GameServices.WritesSuspendedByChoice) return false;
+        // Main-thread facts: never touch the director inside the worker.
+        var seenSteps = new List<string>(_director.CompletedSteps);
+        foreach (var s in _tutorialPendingSteps)
+        {
+            if (!seenSteps.Contains(s, StringComparer.Ordinal)) seenSteps.Add(s);
+        }
+        var extractionObserved = _tutorialExtractionObserved;
+        try
+        {
+            var updated = await _store.UpdateAsync(p =>
+            {
+                var steps = new List<string>(p.Tutorial.CompletedSteps ?? new List<string>());
+                foreach (var id in seenSteps)
+                {
+                    if (!steps.Contains(id, StringComparer.Ordinal)) steps.Add(id);
+                }
+                var allUnioned = TutorialDirector.StepOrder.All(id => steps.Contains(id, StringComparer.Ordinal));
+                var completed = p.Tutorial.Completed || (allUnioned && extractionObserved);
+                return p with { Tutorial = new SaveTutorial(completed, steps) };
+            }, ct);
+            if (ct.IsCancellationRequested || !IsInstanceValid(this)) return false;
+            _tutorialSaveUsable = true;
+            return updated.Tutorial.CompletedSteps.Count > 0 || updated.Tutorial.Completed;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (SaveException ex)
+        {
+            if (!IsInstanceValid(this)) return false;
+            _tutorialSaveUsable = false;
+            _hud?.ShowMessage($"Tutorial progress not saved [{ex.Code}]: the run still counts; steps retry next tutorial launch.", 6f);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (!IsInstanceValid(this)) return false;
+            _tutorialSaveUsable = false;
+            _hud?.ShowMessage($"Tutorial progress not saved ({ex.GetType().Name}): the run still counts; steps retry next tutorial launch.", 6f);
+            return false;
+        }
+    }
+
+    public override void _PhysicsProcess(double delta)
+    {
+        if (_sim is null || _sub is null || _world is null || _hud is null || _paused || _ended)
+        {
+            return;
+        }
+        var dt = Math.Min((float)delta, 0.5f);
+        _sub.PollContinuous();
+        var throttle = _quiet ? Math.Min(_sub.Throttle01, 0.25f) : _sub.Throttle01;
+        var input = new ShipControlInput(throttle, _quiet, _sub.BoostHeld);
+        _sim.Tick(dt, WorldBuilder.ToS(_sub.GlobalPosition), input);
+
+        if (_sim.Phase == RunPhase.Failed)
+        {
+            OnRunFailed();
+            return;
+        }
+        _buddy?.Tick(dt, _sim, _sub.GlobalPosition, -_sub.GlobalTransform.Basis.Z,
+            GetWorld3D().DirectSpaceState, _sub.GetRid());
+        if (_isTutorial && !_trainingBreachDone && _sim.IsDocked)
+        {
+            // Authored training incident, once per tutorial run: a small real
+            // severity-1 breach with live flooding/pressure/audio. Repair uses
+            // the normal sealant path; never a winch substitution, never fatal.
+            var breach = _sim.TryInjectTrainingBreach();
+            if (breach.Success)
+            {
+                _trainingBreachDone = true;
+                _audio?.PlayAlarm();
+                _hud.ShowMessage("Training incident: real hull breach — press R to weld it with sealant.", 6f);
+            }
+        }
+        if (_director is not null && !_ended)
+        {
+            _director.Tick(dt, _sub.Throttle01, _sim, NearestLootDistance());
+        }
+        _statusPoll += dt;
+        if (_statusPoll > 0.15f)
+        {
+            _statusPoll = 0f;
+            RefreshHud();
+        }
+        SyncThreatMarkers();
+        SyncLootMarkers();
+    }
+
+    private void RefreshHud()
+    {
+        if (_sim is null || _sub is null || _world is null || _hud is null || _catalog is null) return;
+        var frameName = _catalog.Frames.TryGetValue(_options!.FrameId, out var f) ? f.DisplayName : _options.FrameId;
+        _hud.UpdateInstruments(_sim, _quiet, frameName);
+        var heading = MathF.Atan2(-_sub.GlobalTransform.Basis.Z.X, -_sub.GlobalTransform.Basis.Z.Z);
+        var objective = _world.GetNode(_world.ObjectiveNodeId).Position;
+        var extract = _world.GetNode(_world.ExtractionNodeId).Position;
+        float nearest = -1f;
+        foreach (var c in _sim.CreatureStates)
+        {
+            var d = (WorldBuilder.ToG(c.Position) - _sub.GlobalPosition).Length();
+            if (nearest < 0f || d < nearest) nearest = d;
+        }
+        var pulseRange = PulseRange();
+        _hud.Sonar.UpdateContacts(_sim.Contacts, pulseRange, _sub.GlobalPosition, heading, objective, extract, nearest, _quiet);
+        if (_buddy is not null) _hud.Sonar.SetTrail(_buddy.Trail);
+        var objName = _world.ObjectiveNodeId;
+        _hud.Sonar.SetObjectiveText(objName.Replace("node.", "SITE "));
+        // Steady warning banner (no flashing): threat, power, hull, cooldown.
+        var warn = "";
+        if (_sim.IsDrilling) warn = $"DRILL TURNING — { _sim.DrillRemainingSeconds:F0}s left, 35 PU, hold position (H cancels)";
+        else if (_sim.IsDocked) warn = "DOCKED — drill (H) or undock (J)";
+        else if (_sim.Threat > 70f) warn = "THREAT HIGH — go quiet (Z) or break contact";
+        else if (_sim.BrownoutActive) warn = "BROWNOUT — sonar offline, cut thrust";
+        else if (_sim.HullIntegrity < _sim.MaxHull * 0.3f) warn = "HULL CRITICAL — repair (R) or winch (X)";
+        else if (_sim.PressureMargin < 0f) warn = "CRUSH DEPTH — ascend or ease deeper load";
+        _hud.SetWarning(warn);
+        if (_sim.Threat > 70f && _audio is not null)
+        {
+            // Alarm is event-driven elsewhere; keep continuous cue off to avoid noise spam.
+        }
+    }
+
+    private float PulseRange()
+    {
+        // Actual loadout-aware range from the sim (biome x module x blackout),
+        // never a stale constant.
+        if (_sim is not null) return _sim.ActivePulseRangeMeters;
+        if (_catalog is null || _world is null) return DomainConstants.PulseBaseRangeMeters;
+        var range = _catalog.Biomes[_world.BiomeId].PulseRangeMeters;
+        if (_options!.ModifierIds.Contains("modifier.sonar_blackout")) range *= 0.7f;
+        return range;
+    }
+
+    public override void _Input(InputEvent @event)
+    {
+        if (@event.IsActionPressed("abyss_pause"))
+        {
+            if (!_ended) SetPaused(!_paused);
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+        if (_paused || _ended || _sim is null || _world is null) return;
+        var sub = _sub;
+        var world = _world;
+        if (sub is null || world is null) return;
+        if (@event.IsActionPressed("abyss_silent"))
+        {
+            _quiet = !_quiet;
+            sub.QuietMode = _quiet; // physical thrust cap, not just domain.
+            _hud?.ShowMessage(_quiet ? "Quiet running: thrust capped, active sonar disabled." : "Normal running.", 3f);
+            if (_hud is not null)
+            {
+                _hud.Sonar.UpdateContacts(Array.Empty<ContactSnapshot>(), PulseRange(), sub.GlobalPosition, 0f,
+                    world.GetNode(world.ObjectiveNodeId).Position, world.GetNode(world.ExtractionNodeId).Position, -1f, _quiet);
+            }
+        }
+        else if (@event.IsActionPressed("abyss_ping")) DoPing();
+        else if (@event.IsActionPressed("abyss_interact")) DoSalvage();
+        else if (@event.IsActionPressed("abyss_survey")) DoSurvey();
+        else if (@event.IsActionPressed("abyss_service")) DoService();
+        else if (@event.IsActionPressed("abyss_repair")) DoRepair();
+        else if (@event.IsActionPressed("abyss_dock")) DoDockToggle();
+        else if (@event.IsActionPressed("abyss_drill")) DoDrillStart();
+        else if (@event.IsActionReleased("abyss_drill")) DoDrillRelease();
+        else if (@event.IsActionPressed("abyss_winch")) DoWinch();
+        else if (@event.IsActionPressed("abyss_extract")) DoExtract();
+    }
+
+    private void DoPing()
+    {
+        if (_sim is null || _hud is null || _audio is null || _sub is null || _world is null) return;
+        var result = _sim.Pulse();
+        if (!result.Success)
+        {
+            _hud.ShowMessage("Ping refused: " + result.Reason, 3f);
+            return;
+        }
+        _lastPulseContacts = result.Contacts;
+        _audio.PlayPing();
+        _hud.ShowMessage($"Ping: {result.Contacts.Count} contacts. +{result.ThreatAdded:F0} threat.", 3f);
+        RefreshHud();
+    }
+
+    private void DoSalvage()
+    {
+        if (_sim is null || _sub is null || _world is null || _hud is null || _audio is null) return;
+        var reach = _sim.SalvageRangeMeters; // actual loadout-aware reach, not a stale constant.
+        var best = NearestLoot(reach);
+        if (best is null)
+        {
+            _hud.ShowMessage($"No salvage within {reach:F0} m — ping (F), close in, then E.", 3f);
+            return;
+        }
+        var result = _sim.TrySalvage(best.SpawnId);
+        if (result.Success)
+        {
+            _audio.PlayClunk();
+            _hud.ShowMessage($"Secured {best.Kind} +{result.ValueBanked} cr{(result.QuestItemId != "" ? $" [{result.QuestItemId}]" : "")}.", 4f);
+            // Codex discovery (real play only): relic/bio/quest salvage carries a
+            // catalog trait id; scrap and crates carry none.
+            if (!string.IsNullOrEmpty(best.TraitId) && _catalog is not null
+                && _catalog.RelicTraits.ContainsKey(best.TraitId))
+            {
+                _salvagedTraitIds.Add(best.TraitId);
+            }
+        }
+        else
+        {
+            _hud.ShowMessage("Salvage refused: " + result.Reason, 4f);
+        }
+        RefreshHud();
+    }
+
+    private void DoSurvey()
+    {
+        if (_sim is null || _sub is null || _hud is null || _audio is null) return;
+        var ship = WorldBuilder.ToS(_sub.GlobalPosition);
+        ContactSnapshot? best = null;
+        var bestDist = float.MaxValue;
+        foreach (var c in _sim.Contacts)
+        {
+            if (c.Surveyed) continue;
+            var d = (c.ApproxPosition - ship).Length();
+            if (d < bestDist) { bestDist = d; best = c; }
+        }
+        if (best is null)
+        {
+            _hud.ShowMessage("No unsurveyed contacts — ping (F) first.", 3f);
+            return;
+        }
+        var result = _sim.TrySurvey(best.ContactId);
+        _hud.ShowMessage(result.Success ? $"Surveyed {best.Class} ({_sim.SurveysDone} total)." : "Survey refused: " + result.Reason, 4f);
+        if (result.Success)
+        {
+            _audio.PlayTick();
+            RecordSurveyDiscovery(best);
+        }
+        RefreshHud();
+    }
+
+    /// <summary>
+    /// Codex discovery (real play only): a successfully surveyed biological
+    /// contact resolves through the world threat spawns to its catalog
+    /// creature id. Ghost/terrain/structure/salvage contacts resolve to
+    /// nothing and are ignored — never invented.
+    /// </summary>
+    private void RecordSurveyDiscovery(ContactSnapshot contact)
+    {
+        if (contact.Class != SonarClass.Biological) return;
+        if (_world is null || _catalog is null) return;
+        var spawnId = contact.ContactId.StartsWith("contact.bio.", StringComparison.Ordinal)
+            ? contact.ContactId["contact.bio.".Length..]
+            : contact.ContactId.StartsWith("contact.passive.", StringComparison.Ordinal)
+                ? contact.ContactId["contact.passive.".Length..]
+                : null;
+        if (string.IsNullOrEmpty(spawnId)) return;
+        var spawn = _world.ThreatSpawns.FirstOrDefault(t => t.SpawnId == spawnId);
+        if (spawn is null) return;
+        if (_catalog.Creatures.ContainsKey(spawn.CreatureId))
+        {
+            _surveyedCreatureIds.Add(spawn.CreatureId);
+        }
+    }
+
+    private void DoService()
+    {
+        if (_sim is null || _sub is null || _world is null || _hud is null || _audio is null) return;
+        var ship = _sub.GlobalPosition;
+        string? bestNode = null;
+        var bestDist = float.MaxValue;
+        foreach (var n in _world.Nodes)
+        {
+            if (string.IsNullOrEmpty(n.ServiceId)) continue;
+            var d = (WorldBuilder.ToG(n.Position) - ship).Length();
+            if (d < bestDist) { bestDist = d; bestNode = n.Id; }
+        }
+        if (bestNode is null)
+        {
+            _hud.ShowMessage("No contract service node on this route leg.", 3f);
+            return;
+        }
+        var result = _sim.TryServiceContractNode(bestNode);
+        _hud.ShowMessage(result.Success ? $"Serviced {bestNode} (sealant {result.SealantRemaining})." : "Service refused: " + result.Reason, 4f);
+        if (result.Success) _audio.PlayChime();
+        RefreshHud();
+    }
+
+    private void DoRepair()
+    {
+        if (_sim is null || _hud is null || _audio is null) return;
+        var zones = _sim.FloodZones;
+        var worst = -1;
+        var worstScore = 0f;
+        for (var i = 0; i < zones.Count; i++)
+        {
+            var score = zones[i].Severity * 10f + zones[i].FloodPercent * 0.1f;
+            if (zones[i].Severity > 0 && score > worstScore) { worstScore = score; worst = i; }
+        }
+        if (worst < 0)
+        {
+            _hud.ShowMessage("No breaches — compartments holding.", 3f);
+            return;
+        }
+        var result = _sim.TryRepairHull(worst);
+        _hud.ShowMessage(result.Success ? $"Welded {zones[worst].ZoneId} (sealant {result.SealantRemaining})." : "Repair refused: " + result.Reason, 4f);
+        if (result.Success) _audio.PlayClunk();
+        RefreshHud();
+    }
+
+    private void DoDockToggle()
+    {
+        if (_sim is null || _sub is null || _world is null || _hud is null) return;
+        if (_sim.IsDocked)
+        {
+            var result = _sim.TryUndock();
+            if (!result.Success)
+            {
+                _hud.ShowMessage("Undock refused: " + result.Reason, 3f);
+                return;
+            }
+            ApplyDockFreeze();
+            _hud.ShowMessage("Undocked — hull free. Drill cancelled if one was running (no award).", 4f);
+            RefreshHud();
+            return;
+        }
+        // Nearest dockable station within honest dock range; speed from the
+        // live rigid body (host validates pose + speed, never teleports).
+        string? bestNode = null;
+        var bestDist = float.MaxValue;
+        foreach (var n in _world.Nodes)
+        {
+            if (!_sim.IsDockableNode(n)) continue;
+            var d = (WorldBuilder.ToG(n.Position) - _sub.GlobalPosition).Length();
+            if (d < bestDist) { bestDist = d; bestNode = n.Id; }
+        }
+        if (bestNode is null)
+        {
+            _hud.ShowMessage("No docking station on this route leg.", 3f);
+            return;
+        }
+        var speed = _sub.LinearVelocity.Length();
+        var dock = _sim.TryDock(bestNode, speed);
+        if (!dock.Success)
+        {
+            _hud.ShowMessage("Dock refused: " + dock.Reason, 4f);
+            return;
+        }
+        ApplyDockFreeze();
+        _audio?.PlayClunk();
+        _hud.ShowMessage($"Docked at {bestNode} — hull held at safe offset. Drill (H) available; undock with J.", 5f);
+        RefreshHud();
+    }
+
+    private void ApplyDockFreeze()
+    {
+        if (_sub is null || _sim is null) return;
+        var frozen = _paused || _sim.IsDocked;
+        _sub.Freeze = frozen;
+        _sub.LinearVelocity = Vector3.Zero;
+        _sub.AngularVelocity = Vector3.Zero;
+    }
+
+    private void DoDrillStart()
+    {
+        if (_sim is null || _sub is null || _world is null || _hud is null || _audio is null) return;
+        if (_sim.IsDrilling)
+        {
+            // Toggle: second press cancels with no award.
+            var cancel = _sim.TryCancelDrill();
+            _hud.ShowMessage(cancel.Success ? "Drill cancelled — no salvage banked." : "Drill cancel refused: " + cancel.Reason, 3f);
+            RefreshHud();
+            return;
+        }
+        if (!_sim.IsDocked)
+        {
+            _hud.ShowMessage("Drill needs a docked station: slow to ≤2 m/s within 25 m and press J first.", 4f);
+            return;
+        }
+        var reach = _sim.DrillRangeMeters;
+        var secured = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in _sim.CargoItems) secured.Add(item.LootSpawnId);
+        LootSpawn? best = null;
+        var bestDist = reach;
+        foreach (var l in _world.LootSpawns)
+        {
+            if (secured.Contains(l.SpawnId)) continue;
+            var d = (WorldBuilder.ToG(l.Position) - _sub.GlobalPosition).Length();
+            if (d < bestDist) { bestDist = d; best = l; }
+        }
+        if (best is null)
+        {
+            _hud.ShowMessage($"No drill target within {reach:F0} m — cores drill here; other salvage uses E. Hold H for 8 s once docked.", 4f);
+            return;
+        }
+        var result = _sim.TryStartDrill(best.SpawnId);
+        _hud.ShowMessage(result.Success
+            ? $"Drill turning on {best.Kind} — hold H and hold position 8 s (35 PU, threat rising). Release/second-press cancels with no award."
+            : "Drill refused: " + result.Reason, 4f);
+        RefreshHud();
+    }
+
+    private void DoDrillRelease()
+    {
+        if (_sim is null || _hud is null) return;
+        if (!_sim.IsDrilling) return;
+        // Hold semantics: releasing H before the 8 s cut completes cancels it.
+        var cancel = _sim.TryCancelDrill();
+        if (cancel.Success) _hud.ShowMessage("Drill released early — no salvage banked.", 3f);
+        RefreshHud();
+    }
+
+    private void DoWinch()
+    {
+        if (_sim is null || _sub is null || _hud is null) return;
+        var result = _sim.TryUseWinch(out var pos);
+        if (!result.Success)
+        {
+            _hud.ShowMessage("Winch refused: " + result.Reason, 3f);
+            return;
+        }
+        _sub.GlobalPosition = WorldBuilder.ToG(pos);
+        _sub.LinearVelocity = Vector3.Zero;
+        _sub.AngularVelocity = Vector3.Zero;
+        _hud.ShowMessage("Emergency winch fired — back at last safe water.", 4f);
+        RefreshHud();
+    }
+
+    private void DoExtract()
+    {
+        if (_sim is null || _hud is null || _audio is null) return;
+        var result = _sim.TryExtract();
+        if (!result.Success || result.Settlement is null)
+        {
+            _hud.ShowMessage("Extraction refused: " + result.Reason, 5f);
+            return;
+        }
+        if (_isTutorial && _director is not null)
+        {
+            // _PhysicsProcess stops at _ended, so the director would never
+            // observe the flipped phase on a later tick. Observe it here, the
+            // same way the headless playback test advances the director once
+            // after extraction — no extra runtime tick is simulated.
+            _director.Tick(0.1f, 0f, _sim, null);
+        }
+        _audio.PlayChime();
+        OnRunSucceeded(result.Settlement);
+    }
+
+    private LootSpawn? NearestLoot(float maxMeters)
+    {
+        if (_sim is null || _sub is null || _world is null) return null;
+        var secured = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in _sim.CargoItems) secured.Add(item.LootSpawnId);
+        LootSpawn? best = null;
+        var bestDist = maxMeters;
+        foreach (var l in _world.LootSpawns)
+        {
+            if (secured.Contains(l.SpawnId)) continue; // never re-target banked salvage.
+            var d = (WorldBuilder.ToG(l.Position) - _sub.GlobalPosition).Length();
+            if (d < bestDist) { bestDist = d; best = l; }
+        }
+        return best;
+    }
+
+    /// <summary>Measured range to the nearest unsecured loot; null when none remain.</summary>
+    private float? NearestLootDistance()
+    {
+        if (_sim is null || _sub is null || _world is null) return null;
+        var secured = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in _sim.CargoItems) secured.Add(item.LootSpawnId);
+        float? best = null;
+        foreach (var l in _world.LootSpawns)
+        {
+            if (secured.Contains(l.SpawnId)) continue;
+            var d = (WorldBuilder.ToG(l.Position) - _sub.GlobalPosition).Length();
+            if (!best.HasValue || d < best.Value) best = d;
+        }
+        return best;
+    }
+
+    private void OnSimEvent(RunEvent evt)
+    {
+        // Surface honest host events; alarms get both audio and the steady banner.
+        switch (evt.Kind)
+        {
+            case "creature.strike":
+            case "hull.breach":
+                _audio?.PlayAlarm();
+                _hud?.ShowMessage(evt.Message, 4f);
+                break;
+            case "contract.objective":
+            case "contract.complete":
+            case "drill.complete":
+            case "dock.done":
+                _audio?.PlayChime();
+                _hud?.ShowMessage(evt.Message, 5f);
+                break;
+            case "drill.cancelled":
+            case "dock.released":
+            case "drill.started":
+                _hud?.ShowMessage(evt.Message, 4f);
+                break;
+            case "run.failed":
+                break; // handled by phase poll with the fail panel.
+            default:
+                if (evt.Kind.StartsWith("power.", StringComparison.Ordinal) ||
+                    evt.Kind.StartsWith("pressure.", StringComparison.Ordinal))
+                {
+                    _hud?.ShowMessage(evt.Message, 3f);
+                }
+                break;
+        }
+        GodotLogBridge.Info(GameServices.Logger, $"[run] {evt.Kind}: {evt.Message}");
+    }
+
+    private void SyncThreatMarkers()
+    {
+        if (_sim is null) return;
+        foreach (var c in _sim.CreatureStates)
+        {
+            if (!_threatMarkers.TryGetValue(c.Id, out var marker) || !IsInstanceValid(marker))
+            {
+                marker = new MeshInstance3D
+                {
+                    Mesh = new PrismMesh { Size = new Vector3(2.4f, 5f, 2.4f) },
+                    MaterialOverride = new StandardMaterial3D
+                    {
+                        AlbedoColor = new Color("#dfa44d"),
+                        EmissionEnabled = true,
+                        Emission = new Color("#dfa44d"),
+                        EmissionEnergyMultiplier = c.IsApex ? 1.6f : 0.8f,
+                    },
+                };
+                AddChild(marker);
+                _threatMarkers[c.Id] = marker;
+            }
+            var target = WorldBuilder.ToG(c.Position);
+            marker.GlobalPosition = marker.GlobalPosition.Lerp(target, 0.06f);
+            marker.LookAt(_sub!.GlobalPosition, Vector3.Up);
+        }
+    }
+
+    private void SyncLootMarkers()
+    {
+        if (_sim is null) return;
+        var secured = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in _sim.CargoItems) secured.Add(item.LootSpawnId);
+        foreach (var kv in _lootMarkers)
+        {
+            if (!IsInstanceValid(kv.Value)) continue;
+            kv.Value.Visible = !secured.Contains(kv.Key);
+        }
+    }
+
+    private void OnRunFailed()
+    {
+        if (_ended || _sim is null) return;
+        _ended = true;
+        var draft = _sim.BuildFailureSettlement();
+        _audio?.PlayAlarm();
+        if (draft is null)
+        {
+            _hud?.ShowEnd("DIVE FAILED", $"{_sim.FailureReason}\nSettlement unavailable (phase mismatch). Return to menu; nothing was credited.", false);
+            return;
+        }
+        _pendingDraft = draft;
+        SettleAsync(draft, failed: true);
+    }
+
+    private void OnRunSucceeded(RunSettlementDraft draft)
+    {
+        if (_ended) return;
+        _ended = true;
+        _pendingDraft = draft;
+        if (_isTutorial)
+        {
+            // Real extraction observed on the main thread: the held tutorial
+            // write at settle decides completion from this flag, so a skipped
+            // extract can never count as completion.
+            _tutorialExtractionObserved = true;
+            _tutorialEndNote = "";
+            _hud?.ShowMessage("Extraction confirmed — settling the dive.", 5f);
+        }
+        SettleAsync(draft, failed: false);
+    }
+
+    private async void SettleAsync(RunSettlementDraft draft, bool failed)
+    {
+        if (_hud is null || _store is null || !IsInstanceValid(this)) return;
+        if (_settleInFlight) return; // no parallel retries: one write at a time.
+        // Unsaved session by choice: no write of any kind (settlement or
+        // tutorial); the profile file stays byte-identical. Reads stayed
+        // allowed, so the run still counts on screen — just not persisted.
+        if (GameServices.WritesSuspendedByChoice)
+        {
+            var choiceNote = "Not saved by choice: this unsaved session records nothing to the profile.";
+            var tutNote = _isTutorial ? "\nTutorial steps retry next tutorial launch." : "";
+            _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
+                $"{(failed ? _sim?.FailureReason + "\n" : "")}Settlement {draft.SettlementId}: {draft.RetainedCredits} cr, {draft.ResearchData} research, {draft.Shards} shards.\n{choiceNote}{tutNote}", false);
+            _hud.SetEndButtons(retryVisible: false, menuEnabled: true);
+            GodotLogBridge.Info(GameServices.Logger, $"Settlement {draft.SettlementId} skipped (unsaved session by choice).");
+            return;
+        }
+        _settleInFlight = true;
+        _settleCts?.Dispose();
+        _settleCts = new CancellationTokenSource();
+        var ct = _settleCts.Token;
+        _saveState = "Saving settlement…";
+        _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
+            $"{(failed ? _sim?.FailureReason + "\n" : "")}Settlement {draft.SettlementId}: {draft.RetainedCredits} cr, {draft.ResearchData} research, {draft.Shards} shards.\n{_saveState}", false);
+        _hud.SetEndButtons(retryVisible: false, menuEnabled: false); // hold exit until the write lands.
+        var payload = new SettlementPayload(draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards,
+            Array.Empty<string>(), Array.Empty<string>(), BuildCodexDiscovery(draft, failed),
+            draft.Outcome == SettlementOutcome.Success ? 1 : 0,
+            draft.Outcome == SettlementOutcome.Failed ? 1 : 0);
+        try
+        {
+            var result = await _store.ApplySettlementAsync(payload, ct);
+            if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
+            var note = result.Outcome == SettlementApplyOutcome.AlreadyApplied
+                ? "Already credited (duplicate safely ignored)."
+                : "Credited once to the settlement ledger.";
+            GodotLogBridge.Info(GameServices.Logger, $"Settlement {draft.SettlementId} applied: {result.Outcome}.");
+            var endNote = "";
+            if (_isTutorial && !failed)
+            {
+                // Held tutorial write: no timeout fake-claim. Success text
+                // appears only when actually persisted; failures stay visible
+                // and steps retry next tutorial launch.
+                _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
+                    $"Settlement {draft.SettlementId}: {draft.RetainedCredits} cr, {draft.ResearchData} research, {draft.Shards} shards.\n{note}\nSaving tutorial progress…", false);
+                var tutOk = await PersistTutorialCompletionAsync(ct);
+                if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
+                endNote = tutOk
+                    ? "\nTutorial complete: The First Ping logged to your profile."
+                    : "\nTutorial finished, but progress could not be saved — the run still counts; steps retry next tutorial launch.";
+                if (tutOk) _hud.ShowMessage("Tutorial complete: The First Ping.", 7f);
+            }
+            _tutorialEndNote = endNote;
+            _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
+                $"Settlement {draft.SettlementId}: {draft.RetainedCredits} cr, {draft.ResearchData} research, {draft.Shards} shards.\n{note}{endNote}", false);
+            _hud.SetEndButtons(retryVisible: false, menuEnabled: true);
+        }
+        catch (OperationCanceledException)
+        {
+            return; // scene torn down; write was cancelled before touching the ledger.
+        }
+        catch (SaveException ex)
+        {
+            if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
+            // No fake credit: visible retry keeps the same idempotent id, so a
+            // retry can never double-award even across processes.
+            GodotLogBridge.Error(GameServices.Logger, $"Settlement save failed [{ex.Code}]: {ex.Message}", ex.Code);
+            _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
+                $"Settlement {draft.SettlementId}: {draft.RetainedCredits} cr pending — save failed [{ex.Code}]: {ex.Message}\nNothing was credited. Retry when storage is available.", true);
+            _hud.SetEndButtons(retryVisible: true, menuEnabled: true);
+        }
+        catch (Exception ex)
+        {
+            if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
+            GodotLogBridge.Error(GameServices.Logger, "Settlement save failed unexpectedly: " + ex.GetType().Name, "SAVE-001");
+            _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
+                $"Settlement {draft.SettlementId}: {draft.RetainedCredits} cr pending — unexpected save fault.\nNothing was credited. Retry when storage is available.", true);
+            _hud.SetEndButtons(retryVisible: true, menuEnabled: true);
+        }
+        finally
+        {
+            _settleInFlight = false;
+        }
+    }
+
+    private void RetrySettlementAsync()
+    {
+        if (_pendingDraft is null || _hud is null || _settleInFlight) return;
+        _hud.HideEnd();
+        SettleAsync(_pendingDraft, _sim?.Phase == RunPhase.Failed);
+    }
+
+    /// <summary>
+    /// Codex ids genuinely observed this run: surveyed creature ids plus
+    /// salvaged relic trait ids (both tracked live from real player verbs),
+    /// plus the biome id on a completed (extracted) run. Every id is checked
+    /// against the catalog; unknown ids are dropped. Unlock lists stay empty:
+    /// blueprint purchase flow is not implemented (recorded-only research).
+    /// Bounded to a handful of ids, far under SettlementPayload limits.
+    /// </summary>
+    private string[] BuildCodexDiscovery(RunSettlementDraft draft, bool failed)
+    {
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        if (_catalog is not null)
+        {
+            foreach (var id in _surveyedCreatureIds)
+            {
+                if (_catalog.Creatures.ContainsKey(id)) found.Add(id);
+            }
+            foreach (var id in _salvagedTraitIds)
+            {
+                if (_catalog.RelicTraits.ContainsKey(id)) found.Add(id);
+            }
+            if (!failed && _catalog.Biomes.ContainsKey(draft.BiomeId))
+            {
+                found.Add(draft.BiomeId);
+            }
+        }
+        return found.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+    }
+
+    private void SetPaused(bool paused)
+    {
+        if (_ended) return;
+        _paused = paused;
+        if (_sub is not null)
+        {
+            // Pause and docking both freeze the hull; undocking while paused
+            // stays frozen until resume.
+            _sub.Freeze = paused || (_sim?.IsDocked ?? false);
+            if (!paused && !(_sim?.IsDocked ?? false))
+            {
+                _sub.LinearVelocity = Vector3.Zero;
+                _sub.AngularVelocity = Vector3.Zero;
+            }
+        }
+        _hud?.SetPaused(paused);
+    }
+
+    private void AbortToMenu()
+    {
+        if (_settleInFlight)
+        {
+            // A settlement write is in flight: hold exit until it completes so
+            // the award can never be lost by leaving mid-write.
+            _hud?.ShowMessage("Settlement write in flight — exit held until it completes.", 3f);
+            return;
+        }
+        SetPaused(false);
+        _ended = true;
+        if (!GameServices.IsInitialized) return;
+        var svc = GameServices.Registry.TryResolve<SceneFlowService>(out var s) ? s : null;
+        if (svc is not null)
+        {
+            // InRun -> MainMenu is legal; Settlement overlay already settled or
+            // explicitly abandoned by the player (no silent credit either way).
+            if (!svc.Navigate(AppScene.MainMenu))
+            {
+                GetTree()?.CallDeferred(SceneTree.MethodName.ChangeSceneToFile, "res://scenes/main_menu.tscn");
+            }
+            return;
+        }
+        GetTree()?.CallDeferred(SceneTree.MethodName.ChangeSceneToFile, "res://scenes/main_menu.tscn");
+    }
+
+    public override void _ExitTree()
+    {
+        try { _settleCts?.Cancel(); }
+        catch { }
+        finally { _settleCts?.Dispose(); _settleCts = null; }
+        if (_sim is not null) _sim.EventRaised -= OnSimEvent;
+    }
+
+    private void ShowFatal(string text)
+    {
+        GD.PushError(text);
+        if (GameServices.IsInitialized)
+        {
+            GodotLogBridge.Error(GameServices.Logger, text, "CONTENT-001");
+        }
+        var layer = new CanvasLayer { Layer = 50 };
+        AddChild(layer);
+        var bg = new ColorRect { Color = new Color("#071622") };
+        bg.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        layer.AddChild(bg);
+        var center = new CenterContainer();
+        center.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        layer.AddChild(center);
+        var box = new VBoxContainer();
+        box.AddThemeConstantOverride("separation", 10);
+        center.AddChild(box);
+        _fatalLabel = new Label { Text = text, AutowrapMode = TextServer.AutowrapMode.WordSmart, CustomMinimumSize = new Vector2(480, 0), HorizontalAlignment = HorizontalAlignment.Center };
+        _fatalLabel.AddThemeColorOverride("font_color", new Color("#dae4df"));
+        box.AddChild(_fatalLabel);
+        var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
+        box.AddChild(row);
+        var menu = new Button { Text = "Return to menu", CustomMinimumSize = new Vector2(220, 38) };
+        menu.Pressed += () => GetTree()?.CallDeferred(SceneTree.MethodName.ChangeSceneToFile, "res://scenes/main_menu.tscn");
+        row.AddChild(menu);
+        _ended = true;
+    }
+}

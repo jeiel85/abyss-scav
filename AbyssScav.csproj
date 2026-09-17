@@ -1,0 +1,29 @@
+<Project Sdk="Godot.NET.Sdk/4.7.2">
+  <!-- Godot 4.7.2 .NET is pinned by design docs. Do not downgrade this Sdk version. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>AbyssScav</AssemblyName>
+    <RootNamespace>AbyssScav</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="src/Foundation/AbyssScav.Foundation.csproj" />
+    <ProjectReference Include="src/Persistence/AbyssScav.Persistence.csproj" />
+    <ProjectReference Include="src/Domain/AbyssScav.Domain.csproj" />
+    <ProjectReference Include="src/Net/Protocol/AbyssScav.Protocol.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Foundation ships as a referenced assembly; never compile its sources twice. -->
+    <Compile Remove="src/Foundation/**/*.cs" />
+    <Compile Remove="src/Persistence/**/*.cs" />
+    <Compile Remove="src/Domain/**/*.cs" />
+    <Compile Remove="src/Net/Protocol/**/*.cs" />
+    <!-- Engine-independent console tests are built via their own csproj only. -->
+    <Compile Remove="tests/**/*.cs" />
+    <Compile Remove=".godot/**/*.cs" />
+    <EmbeddedResource Remove="tests/**/*.resx" />
+    <EmbeddedResource Remove=".godot/**/*" />
+  </ItemGroup>
+</Project>

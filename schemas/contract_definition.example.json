@@ -1,0 +1,12 @@
+{
+  "id": "contract.blackbox.01",
+  "archetype": "BlackBoxRecovery",
+  "biomes": ["B01", "B02"],
+  "tier": 1,
+  "base_payout": 850,
+  "primary_objectives": ["locate_wreck", "recover_blackbox", "extract"],
+  "secondary_pool": ["scan_3_contacts", "recover_500_salvage"],
+  "modifier_pool": ["low_visibility", "severe_current"],
+  "min_players": 1,
+  "max_players": 4
+}

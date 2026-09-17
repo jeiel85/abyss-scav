@@ -1,0 +1,25 @@
+# Example only: pin action versions after verifying them in the target repository.
+name: validate-and-build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Restore .NET
+        run: dotnet restore
+      - name: Build managed code
+        run: dotnet build --configuration Release --no-restore
+      - name: Run project validators
+        run: python tools/validate_content.py
+      # Add the selected Godot setup action or a repository-local Godot binary setup here.
+      # For tags, export Windows x64, create ZIP, generate SHA256SUMS.txt,
+      # and upload the artifacts to a GitHub Release draft.

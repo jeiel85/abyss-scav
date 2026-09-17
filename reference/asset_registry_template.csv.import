@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://dq2oerhknfsu2"
+
+[deps]
+
+files=["res://reference/asset_registry_template.type.translation", "res://reference/asset_registry_template.receipt.translation"]
+
+source_file="res://reference/asset_registry_template.csv"
+dest_files=["res://reference/asset_registry_template.type.translation", "res://reference/asset_registry_template.receipt.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

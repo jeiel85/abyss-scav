@@ -1,0 +1,39 @@
+# Godot 4.x (.NET)
+.godot/
+.godot/mono/
+*.translation
+*.godot.converted.*
+
+# Build output / export
+bin/
+obj/
+build/
+exports/
+*.pck
+*.zip
+
+# .NET
+*.user
+*.suo
+.vs/
+[Rr]elease/
+[Dd]ebug/
+[Test]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.nupkg
+
+# Local run artifacts (never commit user data)
+user_data/
+logs/
+diagnostics/
+saves/
+session.lock
+session.lock.owner
+*.log
+settings.cfg
+settings.cfg.corrupt.*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
