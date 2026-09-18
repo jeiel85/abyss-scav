@@ -137,7 +137,7 @@ public partial class RunHud : Control
 
         _hint = new Label
         {
-            Text = Localization.T("W/S surge · A/D sway · Space/Ctrl heave · Arrows yaw/pitch · Shift boost · Z quiet · F ping · E salvage · V survey · G service · R repair · J dock/undock · H drill hold · X winch · T extract · Esc pause"),
+            Text = Localization.T("W/S surge · A/D sway · Space/Ctrl heave · Arrows yaw/pitch · Shift boost · Z quiet · F ping · E salvage · V survey · G service · R repair · J dock/undock · H drill hold · X winch · B buoy · 1-8 consumables · T extract · Esc pause"),
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         };
         _hint.AddThemeFontSizeOverride("font_size", 12);
@@ -249,11 +249,15 @@ public partial class RunHud : Control
     {
         if (_instruments is null || _cargo is null || _objective is null) return;
         var hullPct = sim.MaxHull > 0f ? sim.HullIntegrity / sim.MaxHull * 100f : 0f;
+        var gear = sim.ConsumableCounts.Count == 0
+            ? "—"
+            : string.Join("  ", sim.ConsumableCounts.Select(kv => $"{ShortConsumable(kv.Key)}×{kv.Value}"));
         _instruments.Text =
             $"FRAME {frameName}   DEPTH {sim.DepthMeters:F0} m\n" +
             $"HULL {sim.HullIntegrity:F0}/{sim.MaxHull:F0} ({hullPct:F0}%)   MARGIN {sim.PressureMargin:F1}\n" +
             $"PWR {sim.PowerDemand:F0}/{sim.PowerSupply:F0} PU  SHED {sim.PowerShedLevel}{(sim.BrownoutActive ? " BROWNOUT" : "")}\n" +
             $"NOISE {sim.Noise:F0}  THREAT {sim.Threat:F0}{(quiet ? "  QUIET" : "")}  SEALANT {sim.Sealant}  WINCH {(sim.WinchUsed ? "SPENT" : "READY")}\n" +
+            $"GEAR {gear}  BUOY {(sim.BuoyCharges == 0 ? "—" : sim.BuoyFired ? "FIRED" : "READY (B)")}\n" +
             $"DOCK {(sim.IsDocked ? sim.DockedNodeId : "FREE")}  SPEED {sim.ShipSpeedMps:F1} m/s" +
             (sim.IsDrilling ? $"  DRILL {sim.DrillElapsedSeconds:F1}/{sim.DrillDurationSeconds:F0}s" : "") +
             $"  REPAIRS {sim.RepairsDone}";
@@ -266,6 +270,20 @@ public partial class RunHud : Control
         }
         _objective.Text = string.Join("   ·   ", parts);
     }
+
+    /// <summary>Compact HUD token for a consumable ID (slot number + short name).</summary>
+    private static string ShortConsumable(string id) => id switch
+    {
+        "consumable.sealant_canister" => "1:SEAL",
+        "consumable.battery_pack" => "2:BATT",
+        "consumable.hull_patch" => "3:PATCH",
+        "consumable.decoy" => "4:DECOY",
+        "consumable.flare" => "5:FLARE",
+        "consumable.sonar_buoy" => "6:BUOY",
+        "consumable.stim" => "7:STIM",
+        "consumable.antifreeze" => "8:ANTI",
+        _ => id,
+    };
 
     public void ShowMessage(string text, float seconds = 4f)
     {

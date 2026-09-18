@@ -136,6 +136,60 @@ internal static class SettlementTests
             TestAssert.False(RunSimulation.TryGetInsuranceQuote("insurance.nope", out _, out var reason), "unknown rejected: " + reason);
         });
 
+        Case("emergency buoy fired boosts failure retention by 0.3 capped at 0.9", () =>
+        {
+            var world = DomainSetup.World(catalog, 306UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var sim = SimWithDeadline(catalog, world, modules: new[] { "module.utility.emergency_buoy" });
+            TestAssert.Equal(1, sim.BuoyCharges, "buoy equipped grants one charge");
+            TestAssert.False(sim.BuoyFired, "not fired yet");
+            foreach (var loot in world.LootSpawns.Take(2))
+            {
+                DomainSetup.Teleport(sim, loot.Position);
+                sim.TrySalvage(loot.SpawnId);
+            }
+            TestAssert.True(sim.SecuredSalvageValue > 0, "secured something");
+            var fire = sim.TryFireBuoy();
+            TestAssert.True(fire.Success, "buoy fired: " + fire.Reason);
+            TestAssert.True(sim.BuoyFired, "fired flag set");
+            FailByDeadline(sim);
+            var draft = sim.BuildFailureSettlement()!;
+            // basic 0.5 + buoy 0.3 = 0.8, below the 0.9 cap.
+            TestAssert.Equal((long)Math.Round(sim.SecuredSalvageValue * 0.8), draft.RetainedCredits, "retention 0.8");
+        });
+
+        Case("buoy not fired keeps normal retention", () =>
+        {
+            var world = DomainSetup.World(catalog, 307UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var sim = SimWithDeadline(catalog, world, modules: new[] { "module.utility.emergency_buoy" });
+            foreach (var loot in world.LootSpawns.Take(2))
+            {
+                DomainSetup.Teleport(sim, loot.Position);
+                sim.TrySalvage(loot.SpawnId);
+            }
+            FailByDeadline(sim);
+            var draft = sim.BuildFailureSettlement()!;
+            TestAssert.Equal((long)Math.Round(sim.SecuredSalvageValue * 0.5), draft.RetainedCredits, "basic retention only");
+        });
+
+        Case("buoy refuses fire when not equipped, twice, and after failure", () =>
+        {
+            var world = DomainSetup.World(catalog, 308UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var plain = DomainSetup.Sim(catalog, world);
+            var r = plain.TryFireBuoy();
+            TestAssert.False(r.Success, "unequipped refused: " + r.Reason);
+            TestAssert.Equal(0, plain.BuoyCharges, "no charges without module");
+
+            var sim = SimWithDeadline(catalog, world, modules: new[] { "module.utility.emergency_buoy" });
+            TestAssert.True(sim.TryFireBuoy().Success, "first fire ok");
+            var twice = sim.TryFireBuoy();
+            TestAssert.False(twice.Success, "second fire refused: " + twice.Reason);
+
+            var doomed = SimWithDeadline(catalog, world, modules: new[] { "module.utility.emergency_buoy" });
+            FailByDeadline(doomed);
+            var late = doomed.TryFireBuoy();
+            TestAssert.False(late.Success, "post-failure refused: " + late.Reason);
+        });
+
         return fail;
     }
 
@@ -163,10 +217,11 @@ internal static class SettlementTests
         ContentCatalog catalog, GeneratedWorld world,
         string difficulty = "difficulty.standard",
         string frame = "frame.skiff",
-        string insurance = "insurance.basic")
+        string insurance = "insurance.basic",
+        IEnumerable<string>? modules = null)
     {
         if (!RunSimulation.TryCreate(world, catalog, difficulty, frame,
-                new[] { "modifier.time_window" }, insurance, out var sim, out var reason) || sim is null)
+                new[] { "modifier.time_window" }, insurance, out var sim, out var reason, modules) || sim is null)
             throw new Exception("Simulation creation failed: " + reason);
         return sim;
     }

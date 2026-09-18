@@ -10,8 +10,8 @@ namespace AbyssScav.Presentation;
 /// <summary>
 /// Solo blueprint research (docs/05 §6): the 4 branches (Navigation /
 /// Engineering / Salvage / Survival) as columns, every catalog module under
-/// its branch with its ResearchCost. Only the 6 modules with implemented
-/// in-run effects (<see cref="ModuleLoadout"/>) are purchasable; the other 18
+/// its branch with its ResearchCost. Only the 7 modules with implemented
+/// in-run effects (<see cref="ModuleLoadout"/>) are purchasable; the other 17
 /// show as explicitly unavailable for NEW purchase (owned copies retained, no
 /// paid no-effect sale). A purchase is an atomic idempotent
 /// FileSaveStore.UpdateAsync with visible refuse reasons. Blueprints are

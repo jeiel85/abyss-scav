@@ -215,6 +215,13 @@ public sealed record CreatureDef(
 public sealed record RelicTraitDef(string Id, string DisplayName, float ThreatOnRecover);
 
 /// <summary>
+/// Per-run consumable definition (docs/00 §11: Consumables 8). Data is
+/// authoritative here; the in-run effect lives in <see cref="RunSimulation"/>
+/// (one hardcoded effect per ID, like modules).
+/// </summary>
+public sealed record ConsumableDef(string Id, string DisplayName, string Description);
+
+/// <summary>
 /// Contract modifier definition (docs/06 §5). Every entry documents a real,
 /// implemented host-side effect; modifiers with presentation-only aspects say so.
 /// </summary>

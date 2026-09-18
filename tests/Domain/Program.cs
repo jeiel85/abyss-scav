@@ -9,6 +9,8 @@ var suites = new (string Suite, Func<int> Run)[]
     ("ModuleLoadout", ModuleLoadoutTests.Run),
     ("Safety", SafetyTests.Run),
     ("Settlement", SettlementTests.Run),
+    ("Consumables", ConsumableTests.Run),
+    ("Events", EventTests.Run),
 };
 
 var totalFail = 0;

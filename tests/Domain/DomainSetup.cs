@@ -28,9 +28,10 @@ internal static class DomainSetup
         IEnumerable<string>? modifiers = null,
         string insurance = "insurance.basic",
         IEnumerable<string>? modules = null,
-        IReadOnlyCollection<string>? owned = null)
+        IReadOnlyCollection<string>? owned = null,
+        IEnumerable<string>? consumables = null)
     {
-        if (!RunSimulation.TryCreate(world, catalog, difficulty, frame, modifiers, insurance, out var sim, out var reason, modules, owned) || sim is null)
+        if (!RunSimulation.TryCreate(world, catalog, difficulty, frame, modifiers, insurance, out var sim, out var reason, modules, owned, isTutorialRun: false, consumableIds: consumables) || sim is null)
             throw new Exception("Simulation creation failed: " + reason);
         return sim;
     }

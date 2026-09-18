@@ -163,7 +163,8 @@ public partial class RunController : Node3D
         _isTutorial = options.IsTutorial;
         if (!RunSimulation.TryCreate(world, catalog, options.DifficultyId, options.FrameId,
                 options.ModifierIds, options.InsuranceId, out var sim, out var simReason,
-                options.EffectiveModuleIds, gate, options.IsTutorial) || sim is null)
+                options.EffectiveModuleIds, gate, options.IsTutorial,
+                options.EffectiveConsumableIds) || sim is null)
         {
             ShowFatal(Localization.T("Run rejected: {0}", (object)simReason));
             return;
@@ -439,6 +440,7 @@ public partial class RunController : Node3D
         var warn = "";
         if (_sim.IsDrilling) warn = Localization.T("DRILL TURNING — {0:F0}s left, 35 PU, hold position (H cancels)", _sim.DrillRemainingSeconds);
         else if (_sim.IsDocked) warn = Localization.T("DOCKED — drill (H) or undock (J)");
+        else if (_sim.ActiveMajorEvent is not null) warn = MajorEventLabel();
         else if (_sim.Threat > 70f) warn = Localization.T("THREAT HIGH — go quiet (Z) or break contact");
         else if (_sim.BrownoutActive) warn = Localization.T("BROWNOUT — sonar offline, cut thrust");
         else if (_sim.HullIntegrity < _sim.MaxHull * 0.3f) warn = Localization.T("HULL CRITICAL — repair (R) or winch (X)");
@@ -448,6 +450,19 @@ public partial class RunController : Node3D
         {
             // Alarm is event-driven elsewhere; keep continuous cue off to avoid noise spam.
         }
+    }
+
+    private string MajorEventLabel()
+    {
+        if (_sim is null || _sim.ActiveMajorEvent is null) return "";
+        return _sim.ActiveMajorEvent switch
+        {
+            "event.acoustic_disturbance" => Localization.T("ACOUSTIC DISTURBANCE — passive sonar halved, pulse slower ({0:F0}s)", _sim.MajorEventRemaining),
+            "event.facility_alarm" => Localization.T("FACILITY ALARM — creatures converging ({0:F0}s)", _sim.MajorEventRemaining),
+            "event.anomaly" => Localization.T("SONAR ANOMALY — contacts unreliable ({0:F0}s)", _sim.MajorEventRemaining),
+            "event.current_shift" => Localization.T("CURRENT SHIFT — engine draw +15 PU, noise +10 ({0:F0}s)", _sim.MajorEventRemaining),
+            _ => "",
+        };
     }
 
     private float PulseRange()
@@ -493,6 +508,15 @@ public partial class RunController : Node3D
         else if (@event.IsActionPressed("abyss_drill")) DoDrillStart();
         else if (@event.IsActionReleased("abyss_drill")) DoDrillRelease();
         else if (@event.IsActionPressed("abyss_winch")) DoWinch();
+        else if (@event.IsActionPressed("abyss_buoy")) DoBuoy();
+        else if (@event.IsActionPressed("abyss_consumable_1")) DoConsumable(0);
+        else if (@event.IsActionPressed("abyss_consumable_2")) DoConsumable(1);
+        else if (@event.IsActionPressed("abyss_consumable_3")) DoConsumable(2);
+        else if (@event.IsActionPressed("abyss_consumable_4")) DoConsumable(3);
+        else if (@event.IsActionPressed("abyss_consumable_5")) DoConsumable(4);
+        else if (@event.IsActionPressed("abyss_consumable_6")) DoConsumable(5);
+        else if (@event.IsActionPressed("abyss_consumable_7")) DoConsumable(6);
+        else if (@event.IsActionPressed("abyss_consumable_8")) DoConsumable(7);
         else if (@event.IsActionPressed("abyss_extract")) DoExtract();
     }
 
@@ -755,6 +779,39 @@ public partial class RunController : Node3D
         RefreshHud();
     }
 
+    private void DoBuoy()
+    {
+        if (_sim is null || _hud is null) return;
+        var result = _sim.TryFireBuoy();
+        if (!result.Success)
+        {
+            _hud.ShowMessage(Localization.T("Buoy refused: {0}", (object)Localization.T(result.Reason, result.Args)), 3f);
+            return;
+        }
+        _hud.ShowMessage(Localization.T("Emergency buoy fired — secured salvage recovery boosted on failure."), 4f);
+        RefreshHud();
+    }
+
+    private void DoConsumable(int slotIndex)
+    {
+        if (_sim is null || _hud is null || _catalog is null) return;
+        var equipped = _options?.EffectiveConsumableIds ?? Array.Empty<string>();
+        if (slotIndex < 0 || slotIndex >= equipped.Count)
+        {
+            _hud.ShowMessage(Localization.T("No consumable in slot {0} — equip one at the contract screen.", slotIndex + 1), 3f);
+            return;
+        }
+        var id = equipped[slotIndex];
+        var result = _sim.TryUseConsumable(id);
+        if (!result.Success)
+        {
+            _hud.ShowMessage(Localization.T("Consumable refused: {0}", (object)Localization.T(result.Reason, result.Args)), 3f);
+            return;
+        }
+        _hud.ShowMessage(Localization.T("Used {0}.", (object)Localization.T(_catalog.Consumables[id].DisplayName)), 3f);
+        RefreshHud();
+    }
+
     private void DoExtract()
     {
         if (_sim is null || _hud is null || _audio is null) return;
@@ -843,7 +900,9 @@ public partial class RunController : Node3D
                 break;
             default:
                 if (evt.Kind.StartsWith("power.", StringComparison.Ordinal) ||
-                    evt.Kind.StartsWith("pressure.", StringComparison.Ordinal))
+                    evt.Kind.StartsWith("pressure.", StringComparison.Ordinal) ||
+                    evt.Kind.StartsWith("event.", StringComparison.Ordinal) ||
+                    evt.Kind is "consumable.used" or "buoy.fired")
                 {
                     _hud?.ShowMessage(text, 3f);
                 }

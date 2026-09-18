@@ -36,6 +36,15 @@ public static class AbyssInput
         Add("abyss_dock", Key.J);
         Add("abyss_drill", Key.H);
         Add("abyss_winch", Key.X);
+        Add("abyss_buoy", Key.B);
+        Add("abyss_consumable_1", Key.Key1);
+        Add("abyss_consumable_2", Key.Key2);
+        Add("abyss_consumable_3", Key.Key3);
+        Add("abyss_consumable_4", Key.Key4);
+        Add("abyss_consumable_5", Key.Key5);
+        Add("abyss_consumable_6", Key.Key6);
+        Add("abyss_consumable_7", Key.Key7);
+        Add("abyss_consumable_8", Key.Key8);
         Add("abyss_extract", Key.T);
         Add("abyss_silent", Key.Z);
         Add("abyss_pause", Key.Escape);

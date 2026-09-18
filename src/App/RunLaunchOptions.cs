@@ -17,13 +17,17 @@ public sealed record RunLaunchOptions(
     string InsuranceId,
     bool IsTutorial = false,
     IReadOnlyList<string>? ModuleIds = null,
-    IReadOnlyList<string>? OwnedBlueprints = null)
+    IReadOnlyList<string>? OwnedBlueprints = null,
+    IReadOnlyList<string>? ConsumableIds = null)
 {
     /// <summary>Equipped module IDs (empty means stock; never null).</summary>
     public IReadOnlyList<string> EffectiveModuleIds => ModuleIds ?? Array.Empty<string>();
 
     /// <summary>Blueprint snapshot at launch for the unowned gate (null skips it).</summary>
     public IReadOnlyCollection<string>? EffectiveOwnedBlueprints => OwnedBlueprints;
+
+    /// <summary>Equipped consumable IDs (empty means none; never null).</summary>
+    public IReadOnlyList<string> EffectiveConsumableIds => ConsumableIds ?? Array.Empty<string>();
     public static RunLaunchOptions DefaultFromCatalog(ContentCatalog catalog)
     {
         var biome = catalog.Biomes.Keys.OrderBy(x => x).First();
@@ -88,6 +92,11 @@ public sealed record RunLaunchOptions(
             // Structural gate only (unknown/duplicate/unsupported/category);
             // the unowned gate runs at the UI + run-start with the live profile.
             problems.AddRange(modErrors);
+        }
+        foreach (var id in EffectiveConsumableIds)
+        {
+            if (!catalog.Consumables.ContainsKey(id))
+                problems.Add($"CONTENT-208 unknown consumable '{id}'.");
         }
         errors = problems;
         return problems.Count == 0;

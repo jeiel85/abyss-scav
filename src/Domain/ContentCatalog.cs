@@ -8,7 +8,8 @@ namespace AbyssScav.Domain;
 /// <para>
 /// CONTENTS (exact, no placeholders): 3 biomes, 3 submarine frames,
 /// 8 contract archetypes, 24 modules (6 sonar / 6 engine / 6 hull / 6 utility),
-/// 4 difficulties, 11 creatures (8 + 3 apex), 8 relic traits, 8 modifiers.
+/// 4 difficulties, 11 creatures (8 + 3 apex), 8 relic traits, 8 modifiers,
+/// 8 consumables.
 /// </para>
 /// <para>
 /// INTEGRATION: build once at boot via <see cref="TryBuild"/>. Publish
@@ -43,6 +44,9 @@ public sealed class ContentCatalog
     /// <summary>All contract modifiers by stable ID.</summary>
     public IReadOnlyDictionary<string, ModifierDef> Modifiers { get; }
 
+    /// <summary>All per-run consumables by stable ID (docs/00 §11: 8 types).</summary>
+    public IReadOnlyDictionary<string, ConsumableDef> Consumables { get; }
+
     /// <summary>Deterministic SHA256 over the canonical catalog text (hex, "sha256:" prefixed).</summary>
     public string CatalogHash { get; }
 
@@ -55,6 +59,7 @@ public sealed class ContentCatalog
         IReadOnlyDictionary<string, CreatureDef> creatures,
         IReadOnlyDictionary<string, RelicTraitDef> traits,
         IReadOnlyDictionary<string, ModifierDef> modifiers,
+        IReadOnlyDictionary<string, ConsumableDef> consumables,
         string hash)
     {
         Biomes = biomes;
@@ -65,6 +70,7 @@ public sealed class ContentCatalog
         Creatures = creatures;
         RelicTraits = traits;
         Modifiers = modifiers;
+        Consumables = consumables;
         CatalogHash = hash;
     }
 
@@ -85,6 +91,7 @@ public sealed class ContentCatalog
         var modifiers = BuiltInModifiers();
         var modules = BuiltInModules();
         var contracts = BuiltInContracts();
+        var consumables = BuiltInConsumables();
 
         CheckIds("biome", biomes.Select(b => b.Id), problems);
         CheckIds("frame", frames.Select(f => f.Id), problems);
@@ -94,6 +101,7 @@ public sealed class ContentCatalog
         CheckIds("creature", creatures.Select(c => c.Id), problems);
         CheckIds("relic-trait", traits.Select(t => t.Id), problems);
         CheckIds("modifier", modifiers.Select(m => m.Id), problems);
+        CheckIds("consumable", consumables.Select(c => c.Id), problems);
 
         // Global duplicate sweep: no two entries of any kind may share one ID.
         var allIds = biomes.Select(b => b.Id)
@@ -104,6 +112,7 @@ public sealed class ContentCatalog
             .Concat(creatures.Select(c => c.Id))
             .Concat(traits.Select(t => t.Id))
             .Concat(modifiers.Select(m => m.Id))
+            .Concat(consumables.Select(c => c.Id))
             .ToList();
         foreach (var group in allIds.GroupBy(id => id).Where(g => g.Count() > 1))
             problems.Add($"CONTENT-101 duplicate stable id '{group.Key}' appears {group.Count()} times.");
@@ -174,7 +183,7 @@ public sealed class ContentCatalog
             return false;
         }
 
-        var hash = ComputeHash(biomes, frames, contracts, modules, difficulties, creatures, traits, modifiers);
+        var hash = ComputeHash(biomes, frames, contracts, modules, difficulties, creatures, traits, modifiers, consumables);
         catalog = new ContentCatalog(
             biomes.ToDictionary(b => b.Id),
             frames.ToDictionary(f => f.Id),
@@ -184,6 +193,7 @@ public sealed class ContentCatalog
             creatures.ToDictionary(c => c.Id),
             traits.ToDictionary(t => t.Id),
             modifiers.ToDictionary(m => m.Id),
+            consumables.ToDictionary(c => c.Id),
             hash);
         errors = Array.Empty<string>();
         return true;
@@ -214,7 +224,8 @@ public sealed class ContentCatalog
         IEnumerable<DifficultyDef> difficulties,
         IEnumerable<CreatureDef> creatures,
         IEnumerable<RelicTraitDef> traits,
-        IEnumerable<ModifierDef> modifiers)
+        IEnumerable<ModifierDef> modifiers,
+        IEnumerable<ConsumableDef> consumables)
     {
         var lines = new List<string> { "version=" + DomainConstants.CatalogVersion };
         foreach (var b in biomes.OrderBy(x => x.Id))
@@ -237,6 +248,8 @@ public sealed class ContentCatalog
             lines.Add($"trait|{t.Id}|{t.ThreatOnRecover:F1}");
         foreach (var m in modifiers.OrderBy(x => x.Id))
             lines.Add($"modifier|{m.Id}");
+        foreach (var c in consumables.OrderBy(x => x.Id))
+            lines.Add($"consumable|{c.Id}");
 
         var bytes = Encoding.UTF8.GetBytes(string.Join("\n", lines) + "\n");
         var digest = SHA256.HashData(bytes);
@@ -417,6 +430,31 @@ public sealed class ContentCatalog
             "Host effect: extraction deadline 2400 s; expiry fails the run."),
         new ModifierDef("modifier.reactor_instability", "Reactor Instability",
             "Host effect: periodic supply dips of -30 PU for 5 s on the event stream."),
+    };
+
+    /// <summary>
+    /// The 8 per-run consumables (docs/00 §11). Effects are one hardcoded branch
+    /// per ID in <see cref="RunSimulation.TryUseConsumable"/>; the catalog only
+    /// carries identity, display text, and the hash line.
+    /// </summary>
+    private static List<ConsumableDef> BuiltInConsumables() => new()
+    {
+        new ConsumableDef("consumable.sealant_canister", "Sealant Canister",
+            "Restores 3 hull-sealant charges for repairs and services."),
+        new ConsumableDef("consumable.battery_pack", "Battery Pack",
+            "Boosts power supply by +30 PU for 30 s."),
+        new ConsumableDef("consumable.hull_patch", "Hull Patch",
+            "Instantly repairs 15% of max hull."),
+        new ConsumableDef("consumable.decoy", "Acoustic Decoy",
+            "Deploys a decoy at your position for 20 s; creatures within 300 m investigate it."),
+        new ConsumableDef("consumable.flare", "Pressure Flare",
+            "Blazing noise spike (+60) for 15 s; creatures within 400 m investigate the flare."),
+        new ConsumableDef("consumable.sonar_buoy", "Sonar Buoy",
+            "Passive sonar range x1.5 for 60 s."),
+        new ConsumableDef("consumable.stim", "Repair Stim",
+            "Repair efficiency x1.5 for 60 s."),
+        new ConsumableDef("consumable.antifreeze", "Antifreeze",
+            "Pressure event load x0.5 for 60 s."),
     };
 }
 

@@ -31,10 +31,13 @@ public static class ModuleLoadout
     /// <summary>Longer manipulator (salvage) reach. No cargo change.</summary>
     public const string SalvageMagnet = "module.utility.salvage_magnet";
 
-    /// <summary>Every module ID with an implemented in-run effect (exactly 6).</summary>
+    /// <summary>One emergency buoy charge; fired before failure, retention +0.3 (cap 0.9).</summary>
+    public const string EmergencyBuoy = "module.utility.emergency_buoy";
+
+    /// <summary>Every module ID with an implemented in-run effect (exactly 7).</summary>
     public static readonly IReadOnlySet<string> SupportedIds = new HashSet<string>(StringComparer.Ordinal)
     {
-        WhisperPulse, PassiveBooster, QuietProp, ReinforcedRib, PressureSkin, SalvageMagnet,
+        WhisperPulse, PassiveBooster, QuietProp, ReinforcedRib, PressureSkin, SalvageMagnet, EmergencyBuoy,
     };
 
     /// <summary>Resolved numeric effects of a validated loadout. All multipliers default to neutral.</summary>
@@ -88,6 +91,7 @@ public static class ModuleLoadout
             ReinforcedRib => "Reinforced rib: max hull +150. No pressure-rating change.",
             PressureSkin => "Pressure skin: hull pressure rating +20. No max-hull change.",
             SalvageMagnet => "Salvage magnet: salvage reach 15m -> 24m. No cargo change.",
+            EmergencyBuoy => "Emergency buoy: one charge; fired before a failed run, failure retention +0.3 (cap 0.9).",
             _ => "No implemented in-run effect: unavailable for new purchase/equip (owned copies retained).",
         };
     }
@@ -106,6 +110,7 @@ public static class ModuleLoadout
             ReinforcedRib => "fx=maxhull_+150",
             PressureSkin => "fx=hullrating_+20",
             SalvageMagnet => "fx=salvage_24m",
+            EmergencyBuoy => "fx=buoy_retention_+0.3_cap0.9",
             _ => "fx=none",
         };
     }

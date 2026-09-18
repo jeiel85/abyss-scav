@@ -126,6 +126,12 @@ public sealed record DrillResult(bool Success, string Reason, params object[] Ar
 /// <summary>Result of the tutorial-only training breach injection.</summary>
 public sealed record TrainingBreachResult(bool Success, string Reason, int ZoneIndex, params object[] Args);
 
+/// <summary>Result of <see cref="RunSimulation.TryUseConsumable"/>.</summary>
+public sealed record ConsumableResult(bool Success, string Reason, int Remaining, params object[] Args);
+
+/// <summary>Result of <see cref="RunSimulation.TryFireBuoy"/>.</summary>
+public sealed record BuoyResult(bool Success, string Reason, params object[] Args);
+
 /// <summary>Result of <see cref="RunSimulation.TryExtract"/>.</summary>
 public sealed record ExtractResult(bool Success, string Reason, RunSettlementDraft? Settlement, params object[] Args);
 
@@ -178,13 +184,16 @@ public enum SettlementOutcome
 /// <summary>
 /// Host-only solo run simulation (docs/03). Owns hull, power, noise, threat,
 /// pressure stress, flooding, sonar contacts, creature FSM, cargo, contract
-/// progress, extraction, repair resources, and the one-use winch.
+/// progress, extraction, repair resources, the one-use winch, per-run
+/// consumables (docs/00 §11), the one-use emergency buoy (docs/00 §6), and the
+/// scheduled major random events (docs/00 §11).
 /// <para>
 /// INTEGRATION (presentation coder): create with <see cref="TryCreate"/>, then per
 /// physics frame call <see cref="Tick"/> with the Godot ship pose and a
 /// <see cref="ShipControlInput"/>. Wire player verbs to <see cref="Pulse"/>,
 /// <see cref="TrySalvage"/>, <see cref="TrySurvey"/>, <see cref="TryRepairHull"/>,
-/// <see cref="TryServiceContractNode"/>, <see cref="TryUseWinch"/>, and
+/// <see cref="TryServiceContractNode"/>, <see cref="TryUseWinch"/>,
+/// <see cref="TryUseConsumable"/>, <see cref="TryFireBuoy"/>, and
 /// <see cref="TryExtract"/>. Read state properties to drive HUD; subscribe to
 /// <see cref="EventRaised"/> for creaks, breaches, brownouts, AI shifts, and
 /// objective updates. Every mutating call validates first and returns a reason —
@@ -294,10 +303,25 @@ public sealed class RunSimulation
     private string? _drillLootSpawnId;
     private float _drillElapsedSeconds;
 
+    private readonly Dictionary<string, int> _consumables = new(StringComparer.Ordinal);
+    private float _batteryTimer;
+    private float _decoyTimer;
+    private float _flareTimer;
+    private float _buoyTimer;
+    private float _stimTimer;
+    private float _antifreezeTimer;
+    private Vector3 _decoyPosition;
+    private Vector3 _flarePosition;
+    private bool _buoyFired;
+    private float _majorEventTimer;
+    private string? _majorEventKind;
+    private float _majorEventRemaining;
+
     private RunSimulation(
         GeneratedWorld world, ContentCatalog catalog, DifficultyDef difficulty,
         SubFrameDef frame, HashSet<string> modifiers, string insuranceId,
-        string[] moduleIds, ModuleLoadout.LoadoutEffects loadout, bool isTutorialRun)
+        string[] moduleIds, ModuleLoadout.LoadoutEffects loadout, bool isTutorialRun,
+        IEnumerable<string>? consumableIds)
     {
         _world = world;
         _biome = catalog.Biomes[world.BiomeId];
@@ -320,6 +344,10 @@ public sealed class RunSimulation
         _aiRng = new DeterministicRandom(DeterministicRandom.Derive(world.RunSeed, GenStreams.Ai));
         _eventRng = new DeterministicRandom(DeterministicRandom.Derive(world.RunSeed, GenStreams.Event));
         _sonarRng = new DeterministicRandom(DeterministicRandom.Derive(world.RunSeed, GenStreams.Sonar));
+
+        foreach (var id in consumableIds ?? Array.Empty<string>())
+            _consumables[id] = 1;
+        _majorEventTimer = _eventRng.NextFloat(120f, 240f);
 
         MaxHull = (float)Math.Round(frame.MaxHull * (modifiers.Contains("modifier.fragile_hull") ? 0.75 : 1.0) + loadout.MaxHullBonus);
         HullIntegrity = MaxHull;
@@ -356,6 +384,11 @@ public sealed class RunSimulation
     /// too. Omitted modules default to an empty (stock) loadout, so older calls
     /// behave exactly as before. Blueprints are never consumed by equipping.
     /// </para>
+    /// <para>
+    /// Optional <paramref name="consumableIds"/> equips per-run consumables
+    /// (docs/00 §11): each listed ID starts with exactly one charge. Unknown IDs
+    /// are rejected; omitted IDs default to an empty consumable loadout.
+    /// </para>
     /// </summary>
     public static bool TryCreate(
         GeneratedWorld world,
@@ -368,7 +401,8 @@ public sealed class RunSimulation
         out string reason,
         IEnumerable<string>? moduleIds = null,
         IReadOnlyCollection<string>? ownedBlueprints = null,
-        bool isTutorialRun = false)
+        bool isTutorialRun = false,
+        IEnumerable<string>? consumableIds = null)
     {
         simulation = null;
         reason = string.Empty;
@@ -392,12 +426,19 @@ public sealed class RunSimulation
             mods.Add(m);
         }
 
+        foreach (var id in consumableIds ?? Array.Empty<string>())
+        {
+            if (!catalog.Consumables.ContainsKey(id))
+            { reason = $"CONTENT-208 unknown consumable '{id}'."; return false; }
+        }
+
         var verdict = TrenchGenerator.Validate(world, catalog);
         if (!verdict.IsValid)
         { reason = "GEN-060 world failed validation: " + string.Join("; ", verdict.Errors); return false; }
 
         simulation = new RunSimulation(world, catalog, difficulty, frame, mods, insuranceId,
-            (moduleIds ?? Array.Empty<string>()).ToArray(), ModuleLoadout.Resolve(moduleIds), isTutorialRun);
+            (moduleIds ?? Array.Empty<string>()).ToArray(), ModuleLoadout.Resolve(moduleIds), isTutorialRun,
+            consumableIds);
         return true;
     }
 
@@ -450,13 +491,15 @@ public sealed class RunSimulation
         }
     }
 
-    /// <summary>Actual passive-sonar range in meters (biome × loadout × visibility).</summary>
+    /// <summary>Actual passive-sonar range in meters (biome × loadout × visibility × events × buoy).</summary>
     public float PassiveSonarRangeMeters
     {
         get
         {
             var range = _biome.PassiveRangeMeters * _loadout.PassiveRangeMult;
             if (_modifierIds.Contains("modifier.low_visibility")) range *= 0.7f;
+            if (_majorEventKind == "event.acoustic_disturbance") range *= 0.5f;
+            if (_buoyTimer > 0f) range *= 1.5f;
             return range;
         }
     }
@@ -569,6 +612,21 @@ public sealed class RunSimulation
 
     /// <summary>True once the one-use winch has been spent.</summary>
     public bool WinchUsed { get; private set; }
+
+    /// <summary>Equipped consumable counts by ID (each equipped item starts at 1; spent on use).</summary>
+    public IReadOnlyDictionary<string, int> ConsumableCounts => _consumables;
+
+    /// <summary>Emergency-buoy charges: 1 when module.utility.emergency_buoy is equipped, else 0.</summary>
+    public int BuoyCharges => _moduleIds.Contains("module.utility.emergency_buoy") ? 1 : 0;
+
+    /// <summary>True once the emergency buoy has been fired this run (one per run).</summary>
+    public bool BuoyFired => _buoyFired;
+
+    /// <summary>Active major random event kind (null when none; docs/00 §11).</summary>
+    public string? ActiveMajorEvent => _majorEventKind;
+
+    /// <summary>Seconds remaining on the active major event (0 when none).</summary>
+    public float MajorEventRemaining => _majorEventRemaining;
 
     /// <summary>True while docked at a station node. Docking freezes the ship at a safe offset; the domain never teleports.</summary>
     public bool IsDocked => _dockedNodeId is not null;
@@ -691,6 +749,8 @@ public sealed class RunSimulation
         }
         _dipTimer = Math.Max(0f, _dipTimer - dt);
         if (_dipTimer > 0f) supply -= 30f;
+        _batteryTimer = Math.Max(0f, _batteryTimer - dt);
+        if (_batteryTimer > 0f) supply += 30f;
         PowerSupply = Math.Max(0f, supply);
 
         var demand = 15f; // life support (protected, never shed)
@@ -701,6 +761,7 @@ public sealed class RunSimulation
         if (_drainTimer > 0f) demand += 10f;
         if (_drillLootSpawnId is not null) demand += DomainConstants.DrillPowerDrawPU;
         if (_modifierIds.Contains("modifier.severe_current")) demand += 10f;
+        if (_majorEventKind == "event.current_shift") demand += 15f;
         PowerDemand = demand;
 
         var deficit = demand - PowerSupply;
@@ -720,6 +781,7 @@ public sealed class RunSimulation
         var target = engineTerm + _noiseSpike;
         if (_drillLootSpawnId is not null) target += 18f; // drill bit + cuttings pump.
         if (_modifierIds.Contains("modifier.severe_current")) target += 8f;
+        if (_majorEventKind == "event.current_shift") target += 10f;
         target = Math.Clamp(target, 0f, 100f);
         var slew = 25f * dt;
         Noise = Math.Abs(target - Noise) <= slew ? target : Noise + Math.Sign(target - Noise) * slew;
@@ -737,6 +799,7 @@ public sealed class RunSimulation
         var depthPressure = Math.Max(0f, DepthMeters) / 100f;
         if (_surgeTimer > 0f) { _surgeTimer -= dt; if (_surgeTimer <= 0f) { _pressureEventMod = 1f; Raise("pressure.eased", "Pressure surge eased."); } }
         var effective = depthPressure * _biome.PressureModifier * _pressureEventMod;
+        if (_antifreezeTimer > 0f) effective *= 0.5f;
         PressureMargin = _hullRatingEffective - effective;
 
         _stressAccumulator += dt;
@@ -781,8 +844,16 @@ public sealed class RunSimulation
 
         PulseCooldownRemaining = Math.Max(0f, PulseCooldownRemaining - dt);
 
+        // Consumable effect windows (decoy/flare retargeting lives in UpdateCreatures).
+        _decoyTimer = Math.Max(0f, _decoyTimer - dt);
+        _flareTimer = Math.Max(0f, _flareTimer - dt);
+        _buoyTimer = Math.Max(0f, _buoyTimer - dt);
+        _stimTimer = Math.Max(0f, _stimTimer - dt);
+        _antifreezeTimer = Math.Max(0f, _antifreezeTimer - dt);
+
         UpdatePassiveContacts(dt);
         UpdateCreatures(dt, thr);
+        UpdateMajorEvents(dt);
 
         // Apex observation accumulates only after a pulse has revealed the apex.
         if (_contract.Id == "contract.apex_observe")
@@ -853,9 +924,11 @@ public sealed class RunSimulation
                 c.Confidence = Math.Min(1f, c.Confidence + 0.25f);
             }
             if (dist < 100f) c.Confidence = Math.Min(1f, c.Confidence + 0.15f);
+            if (_majorEventKind == "event.anomaly") c.Confidence = Math.Min(c.Confidence, 0.4f);
             c.Pings++;
             // Display error shrinks with confidence: up to 20 m at first ping.
             var err = (1f - c.Confidence) * 20f;
+            if (_majorEventKind == "event.anomaly") err *= 2f;
             c.DisplayPosition = err <= 0.01f ? truePos : truePos + new Vector3(
                 _sonarRng.NextFloat(-err, err), _sonarRng.NextFloat(-err, err), _sonarRng.NextFloat(-err, err));
         }
@@ -920,6 +993,7 @@ public sealed class RunSimulation
         var cooldown = DomainConstants.PulseBaseCooldownSeconds * _difficulty.PulseCooldownMultiplier * _loadout.PulseCooldownMult;
         if (_modifierIds.Contains("modifier.sonar_blackout")) cooldown *= 2f;
         if (PowerShedLevel == 1) cooldown *= 1.5f;
+        if (_majorEventKind == "event.acoustic_disturbance") cooldown *= 1.5f;
         PulseCooldownRemaining = cooldown;
 
         Raise("sonar.pulse", "Active pulse: {0} contacts in range.", fresh.Count);
@@ -1038,7 +1112,7 @@ public sealed class RunSimulation
         Sealant -= cost;
         SealantUsed += cost;
         _severity[zoneIndex] = Math.Max(0, _severity[zoneIndex] - 1);
-        _flood[zoneIndex] *= 1f - _difficulty.RepairEfficiency;
+        _flood[zoneIndex] = Math.Max(0f, _flood[zoneIndex] * (1f - _difficulty.RepairEfficiency * (_stimTimer > 0f ? 1.5f : 1f)));
         RepairsDone++;
         _noiseSpike += 10f;
         Threat = Math.Min(100f, Threat + 2f);
@@ -1110,6 +1184,81 @@ public sealed class RunSimulation
         returnPosition = LastSafePosition;
         Raise("winch.used", "Emergency winch fired: returning to last safe position.");
         return new WinchResult(true, string.Empty, LastSafePosition, Array.Empty<object>());
+    }
+
+    /// <summary>
+    /// Uses one equipped consumable (docs/00 §11). Requires an active run and a
+    /// remaining charge; unknown IDs are refused. Each equipped consumable starts
+    /// with exactly one charge and is spent on use — there is no refill path.
+    /// Effects are hardcoded per ID (like modules) and covered by tests.
+    /// </summary>
+    public ConsumableResult TryUseConsumable(string consumableId)
+    {
+        if (Phase != RunPhase.Active)
+            return new ConsumableResult(false, "Run is not active.", 0, Array.Empty<object>());
+        if (!_consumables.TryGetValue(consumableId, out var count) || count <= 0)
+            return new ConsumableResult(false, "No {0} charges left.", 0, consumableId);
+        switch (consumableId)
+        {
+            case "consumable.sealant_canister":
+                Sealant += 3;
+                Raise("consumable.used", "Sealant canister: +3 sealant ({0} total).", Sealant);
+                break;
+            case "consumable.battery_pack":
+                _batteryTimer = 30f;
+                Raise("consumable.used", "Battery pack: +30 PU supply for 30 s.");
+                break;
+            case "consumable.hull_patch":
+                HullIntegrity = Math.Min(MaxHull, HullIntegrity + MaxHull * 0.15f);
+                Raise("consumable.used", "Hull patch: repaired 15% of max hull ({0:F0}/{1:F0}).", HullIntegrity, MaxHull);
+                break;
+            case "consumable.decoy":
+                _decoyPosition = ShipPosition;
+                _decoyTimer = 20f;
+                Raise("consumable.used", "Acoustic decoy deployed: creatures within 300 m investigate it for 20 s.");
+                break;
+            case "consumable.flare":
+                _flarePosition = ShipPosition;
+                _flareTimer = 15f;
+                _noiseSpike += 60f;
+                Raise("consumable.used", "Pressure flare: noise spike +60, creatures within 400 m investigate for 15 s.");
+                break;
+            case "consumable.sonar_buoy":
+                _buoyTimer = 60f;
+                Raise("consumable.used", "Sonar buoy: passive range x1.5 for 60 s.");
+                break;
+            case "consumable.stim":
+                _stimTimer = 60f;
+                Raise("consumable.used", "Repair stim: repair efficiency x1.5 for 60 s.");
+                break;
+            case "consumable.antifreeze":
+                _antifreezeTimer = 60f;
+                Raise("consumable.used", "Antifreeze: pressure event load x0.5 for 60 s.");
+                break;
+            default:
+                return new ConsumableResult(false, "Unknown consumable '{0}'.", 0, consumableId);
+        }
+        _consumables[consumableId] = count - 1;
+        return new ConsumableResult(true, string.Empty, count - 1, Array.Empty<object>());
+    }
+
+    /// <summary>
+    /// Fires the one-use emergency buoy (docs/00 §6). Requires the
+    /// module.utility.emergency_buoy module equipped and an active run; fires
+    /// exactly once. On a failed run the buoy boosts secured-cargo retention by
+    /// +0.3 (capped at 0.9) in <see cref="BuildFailureSettlement"/>.
+    /// </summary>
+    public BuoyResult TryFireBuoy()
+    {
+        if (Phase != RunPhase.Active)
+            return new BuoyResult(false, "Run is not active.", Array.Empty<object>());
+        if (BuoyCharges == 0)
+            return new BuoyResult(false, "No emergency buoy equipped: install module.utility.emergency_buoy.", Array.Empty<object>());
+        if (_buoyFired)
+            return new BuoyResult(false, "Buoy already fired: one per run.", Array.Empty<object>());
+        _buoyFired = true;
+        Raise("buoy.fired", "Emergency buoy fired: secured salvage recovery boosted on failure.");
+        return new BuoyResult(true, string.Empty, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1313,6 +1462,88 @@ public sealed class RunSimulation
     }
 
     /// <summary>
+    /// Scheduled major random events (docs/00 §11). The first event lands 120-240 s
+    /// in, then every 180-360 s. Events are mutually exclusive: while one is live
+    /// the timer idles. Migration is instant; the rest carry a timed window.
+    /// </summary>
+    private void UpdateMajorEvents(float dt)
+    {
+        if (_majorEventKind is not null)
+        {
+            _majorEventRemaining -= dt;
+            if (_majorEventRemaining <= 0f)
+            {
+                _majorEventKind = null;
+                _majorEventRemaining = 0f;
+                Raise("event.ended", "Environmental conditions normalize.");
+            }
+            return;
+        }
+        _majorEventTimer -= dt;
+        if (_majorEventTimer > 0f) return;
+        TriggerMajorEvent();
+    }
+
+    private void TriggerMajorEvent()
+    {
+        var roll = _eventRng.NextFloat(0f, 1f);
+        var kind = roll switch
+        {
+            < 0.2f => "event.acoustic_disturbance",
+            < 0.4f => "event.facility_alarm",
+            < 0.6f => "event.anomaly",
+            < 0.8f => "event.current_shift",
+            _ => "event.migration",
+        };
+        switch (kind)
+        {
+            case "event.acoustic_disturbance":
+                _majorEventKind = kind;
+                _majorEventRemaining = 30f;
+                Raise("event.acoustic_disturbance", "Acoustic disturbance: passive sonar range halved, pulse cooldown x1.5 for 30 s.");
+                break;
+            case "event.facility_alarm":
+                _majorEventKind = kind;
+                _majorEventRemaining = 30f;
+                Raise("event.facility_alarm", "Facility alarm: creatures converge for 30 s.");
+                break;
+            case "event.anomaly":
+                _majorEventKind = kind;
+                _majorEventRemaining = 20f;
+                Raise("event.anomaly", "Sonar anomaly: contact accuracy degraded for 20 s.");
+                break;
+            case "event.current_shift":
+                _majorEventKind = kind;
+                _majorEventRemaining = 25f;
+                Raise("event.current_shift", "Current shift: engine draw +15 PU, noise +10 for 25 s.");
+                break;
+            default:
+                TriggerMigration();
+                break;
+        }
+        _majorEventTimer = _eventRng.NextFloat(180f, 360f);
+    }
+
+    /// <summary>Migration: up to two non-engaged creatures reposition to route nodes and go dormant.</summary>
+    private void TriggerMigration()
+    {
+        if (_creatures.Count == 0) return;
+        var routeNodes = _world.Nodes.Where(n => n.Kind is WorldNodeKind.Route or WorldNodeKind.Objective).ToList();
+        if (routeNodes.Count == 0) return;
+        var moved = 0;
+        for (var i = 0; i < _creatures.Count && moved < 2; i++)
+        {
+            var creature = _creatures[_eventRng.NextInt(0, _creatures.Count)];
+            if (creature.State is CreatureState.Attack or CreatureState.Hunt) continue;
+            creature.Position = routeNodes[_eventRng.NextInt(0, routeNodes.Count)].Position;
+            creature.State = CreatureState.Dormant;
+            creature.StateTime = 0f;
+            moved++;
+        }
+        Raise("event.migration", "Creature migration: {0} contacts repositioned.", moved);
+    }
+
+    /// <summary>
     /// Attempts extraction at the origin node. Succeeds only with primary
     /// objectives complete inside <see cref="DomainConstants.ExtractionRadiusMeters"/>;
     /// anything else returns an explicit reason — never a fake success.
@@ -1343,9 +1574,10 @@ public sealed class RunSimulation
     /// Builds the failure settlement for a failed run. Retains only what was
     /// actually earned: secured cargo at the insurance retention (none 20% /
     /// basic 50% / premium 70%), scanned research in full (docs/05 §3), and
-    /// quest discoveries. No contract base, no shards, no participation research:
-    /// an empty failure settles to zero. The draft is cached per instance, so
-    /// repeated calls return equal drafts with the same settlement ID.
+    /// quest discoveries. A fired emergency buoy (docs/00 §6) boosts retention by
+    /// +0.3, capped at 0.9. No contract base, no shards, no participation
+    /// research: an empty failure settles to zero. The draft is cached per
+    /// instance, so repeated calls return equal drafts with the same settlement ID.
     /// Only valid once <see cref="Phase"/> is <see cref="RunPhase.Failed"/>;
     /// otherwise returns null.
     /// INTEGRATION: call after observing the failed phase, then submit like a success draft.
@@ -1355,6 +1587,7 @@ public sealed class RunSimulation
         if (Phase != RunPhase.Failed) return null;
         if (_failureDraft is not null) return _failureDraft;
         var retention = Retention();
+        if (_buoyFired) retention = Math.Min(0.9, retention + 0.3);
         var credits = (long)Math.Round(SecuredSalvageValue * retention);
         var research = SurveysDone * 10L + _questRecovered.Count * 5L;
         _failureDraft = new RunSettlementDraft(
@@ -1398,6 +1631,8 @@ public sealed class RunSimulation
         _passiveTimer = 0f;
         var range = _biome.PassiveRangeMeters * _loadout.PassiveRangeMult;
         if (_modifierIds.Contains("modifier.low_visibility")) range *= 0.7f;
+        if (_majorEventKind == "event.acoustic_disturbance") range *= 0.5f;
+        if (_buoyTimer > 0f) range *= 1.5f;
         foreach (var creature in _creatures)
         {
             var dist = Vector3.Distance(creature.Position, ShipPosition);
@@ -1427,12 +1662,19 @@ public sealed class RunSimulation
         {
             if (creature.SonarExposedSeconds > 0f) creature.SonarExposedSeconds -= dt;
             creature.AttackCooldown = Math.Max(0f, creature.AttackCooldown - dt);
-            var toShip = ShipPosition - creature.Position;
+            // Decoy and flare retarget nearby creatures away from the ship; the
+            // FSM treats the decoy/flare position as the ship for movement and
+            // state transitions while the effect window is live.
+            var target = ShipPosition;
+            if (_decoyTimer > 0f && Vector3.Distance(creature.Position, _decoyPosition) < 300f) target = _decoyPosition;
+            else if (_flareTimer > 0f && Vector3.Distance(creature.Position, _flarePosition) < 400f) target = _flarePosition;
+            var toShip = target - creature.Position;
             var dist = toShip.Length();
             var dir = dist > 0.001f ? toShip / dist : Vector3.Zero;
 
             var hear = creature.Def.BaseHearingMeters * (0.35f + 1.3f * (Noise / 100f)) * _difficulty.DetectMultiplier;
             if (creature.SonarExposedSeconds > 0f) hear *= 1.5f;
+            if (_majorEventKind == "event.facility_alarm") hear *= 1.5f;
             var stalkRange = hear * 0.6f;
             var huntRange = creature.IsApex ? 60f : 40f;
 

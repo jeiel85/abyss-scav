@@ -31,6 +31,7 @@ public partial class ContractSelect : Control
     private Label? _desc;
     private Label? _status;
     private readonly List<CheckBox> _modBoxes = new();
+    private readonly List<CheckBox> _consumableBoxes = new();
     private Button? _launch;
     private FileSaveStore? _saveStore;
     private List<string> _ownedBlueprints = new();
@@ -229,6 +230,21 @@ public partial class ContractSelect : Control
         _loadoutDesc.Text = Localization.T("Stock loadout — no modules equipped.");
         content.AddChild(_loadoutDesc);
 
+        var consumableLabel = new Label { Text = Localization.T("Consumables (optional) — one charge each, spent on use (1-8 keys)") };
+        consumableLabel.AddThemeColorOverride("font_color", Parchment());
+        content.AddChild(consumableLabel);
+        var consumables = new VBoxContainer();
+        content.AddChild(consumables);
+        foreach (var c in catalog.Consumables.Values.OrderBy(c => c.Id))
+        {
+            var cb = new CheckBox { Text = $"{Localization.T(c.DisplayName)} ({c.Id})" };
+            cb.AddThemeColorOverride("font_color", Parchment());
+            cb.TooltipText = Localization.T(c.Description);
+            consumables.AddChild(cb);
+            _consumableBoxes.Add(cb);
+            cb.SetMeta("cons_id", c.Id);
+        }
+
         _desc = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart };
         _desc.AddThemeFontSizeOverride("font_size", 13);
         _desc.AddThemeColorOverride("font_color", Parchment());
@@ -330,6 +346,7 @@ public partial class ContractSelect : Control
             if (IsInstanceValid(cb) && cb.ButtonPressed) mods.Add((string)cb.GetMeta("mod_id"));
         }
         var moduleIds = SelectedModuleIds();
+        var consumableIds = SelectedConsumableIds();
         if (moduleIds.Count > 0)
         {
             // Fresh ownership needs the live profile: a module-equipped launch
@@ -354,7 +371,8 @@ public partial class ContractSelect : Control
         var options = new RunLaunchOptions(
             SelectedId(_biome!), SelectedId(_contract!), SelectedId(_difficulty!),
             SelectedId(_frame!), seed, mods, SelectedId(_insurance!),
-            ModuleIds: moduleIds, OwnedBlueprints: new List<string>(_ownedBlueprints));
+            ModuleIds: moduleIds, OwnedBlueprints: new List<string>(_ownedBlueprints),
+            ConsumableIds: consumableIds);
         Launch(options);
     }
 
@@ -386,7 +404,8 @@ public partial class ContractSelect : Control
         }
         if (!RunSimulation.TryCreate(world, _catalog, options.DifficultyId, options.FrameId,
                 options.ModifierIds, options.InsuranceId, out _, out var simReason,
-                options.EffectiveModuleIds, options.EffectiveOwnedBlueprints, options.IsTutorial))
+                options.EffectiveModuleIds, options.EffectiveOwnedBlueprints, options.IsTutorial,
+                options.EffectiveConsumableIds))
         {
             _status.Text = Localization.T("Run rejected: {0}", (object)simReason);
             return;
@@ -425,6 +444,17 @@ public partial class ContractSelect : Control
                 continue;
             var id = (string)slot.GetItemMetadata(slot.Selected);
             if (!string.IsNullOrEmpty(id)) ids.Add(id);
+        }
+        return ids;
+    }
+
+    /// <summary>Checked consumable IDs in catalog order (slot order = key order 1-8).</summary>
+    private List<string> SelectedConsumableIds()
+    {
+        var ids = new List<string>();
+        foreach (var cb in _consumableBoxes)
+        {
+            if (IsInstanceValid(cb) && cb.ButtonPressed) ids.Add((string)cb.GetMeta("cons_id"));
         }
         return ids;
     }
