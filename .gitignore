@@ -39,3 +39,5 @@ settings.cfg.corrupt.*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+run_game.bat
