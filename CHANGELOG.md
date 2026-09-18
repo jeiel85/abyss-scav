@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Accessibility & Diagnostics**:
   - Colorblind-friendly sonar palettes, high-contrast HUD modes, and key remapping.
   - In-engine diagnostics, crash recovery, and 3-generation atomic save rollback.
+  - **Localization**: full Korean (ko) UI support — menus, cockpit HUD, tutorial, sonar callouts, and dive runtime messages; language selection via settings; missing-key fallback to English with CI coverage validation.
 - **Verification & Automation**:
   - Complete managed test suites across Domain, Foundation, Net, and Persistence layers.
   - Headless in-engine smoke verification and deterministic autopilot playback simulation.
   - GitHub Actions automated validation workflow and release packaging scripts.
+  - i18n key coverage, format placeholder integrity, and version consistency gates in the unified test runner.

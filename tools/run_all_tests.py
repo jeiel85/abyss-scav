@@ -58,6 +58,10 @@ def main():
     if not run_command([sys.executable, "tools/validate_i18n_coverage.py"], "i18n Coverage Validation"):
         failures += 1
 
+    # 3.6 Version consistency validation (in-game vs package identity)
+    if not run_command([sys.executable, "tools/validate_version_consistency.py"], "Version Consistency Validation"):
+        failures += 1
+
     # 4. In-engine headless test (if Godot Mono is present)
     godot_bin = find_godot_mono()
     if godot_bin:

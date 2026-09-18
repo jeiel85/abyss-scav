@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0"
+VERSION = "0.1.0-a01"
 
 def sha256_file(filepath: Path) -> str:
     h = hashlib.sha256()

@@ -49,6 +49,12 @@ jobs:
       - name: Validate Design Package
         run: python tools/validate_design_package.py
 
+      - name: Validate i18n Coverage
+        run: python tools/validate_i18n_coverage.py
+
+      - name: Validate Version Consistency
+        run: python tools/validate_version_consistency.py
+
   release:
     name: Build and Package Windows Release
     needs: validate
@@ -96,6 +102,17 @@ jobs:
           Copy-Item "$godotDir\templates_extracted\templates\*" $templatesDir -Recurse -Force
           
           echo "GODOT_BIN=$godotDir\Godot_v${godotVersion}_mono_win64\Godot_v${godotVersion}_mono_win64_console.exe" >> $env:GITHUB_ENV
+
+      - name: Verify Tag Matches In-Game Version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $inGame = Select-String -Path src\Foundation\GameVersion.cs -Pattern 'Current = "([^"]+)"' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+          if ($tag -ne $inGame) {
+            Write-Error "Tag version '$tag' does not match in-game version '$inGame'. RELEASE_GATE requires tag = in-game version."
+            exit 1
+          }
+          Write-Host "Tag '$tag' matches in-game version '$inGame'."
 
       - name: Export Windows Desktop Release
         shell: pwsh
