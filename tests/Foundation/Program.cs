@@ -3,6 +3,7 @@ using AbyssScav.Foundation.Tests;
 var suites = new (string Suite, Func<int> Run)[]
 {
     ("Config", ConfigTests.Run),
+    ("Localization", LocalizationTests.Run),
     ("SessionLock", SessionLockTests.Run),
     ("Logging", LoggingTests.Run),
     ("AudioPolicy", AudioPolicyTests.Run),

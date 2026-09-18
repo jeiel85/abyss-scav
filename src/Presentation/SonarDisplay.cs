@@ -1,4 +1,5 @@
 using AbyssScav.Domain;
+using AbyssScav.Foundation;
 using Godot;
 using SysVec = System.Numerics.Vector3;
 
@@ -122,17 +123,17 @@ public partial class SonarDisplay : Control
 
         // Compass strip.
         DrawRect(new Rect2(0, 0, w, 30), new Color(0.02f, 0.07f, 0.10f, 0.95f));
-        DrawString(font, new Vector2(8, 20), "OBJ " + _objectiveText + "  " + RadToMark(_objectiveBearing), HorizontalAlignment.Left, -1, 13, parchment);
-        var extMark = "EXT " + RadToMark(_extractBearing);
+        DrawString(font, new Vector2(8, 20), Localization.T("OBJ") + " " + _objectiveText + "  " + RadToMark(_objectiveBearing), HorizontalAlignment.Left, -1, 13, parchment);
+        var extMark = Localization.T("EXT") + " " + RadToMark(_extractBearing);
         DrawString(font, new Vector2(w - 8 - font.GetStringSize(extMark, HorizontalAlignment.Left, -1, 13).X, 20), extMark, HorizontalAlignment.Left, -1, 13, cyan);
         if (_nearestThreatRange >= 0f)
         {
-            var warn = $"THREAT {_nearestThreatRange:F0}m" + (_quiet ? " - QUIET" : "");
+            var warn = Localization.T("THREAT {0}m", (object)$"{_nearestThreatRange:F0}") + (_quiet ? Localization.T(" - QUIET") : "");
             DrawString(font, new Vector2(8, 30 + 12), warn, HorizontalAlignment.Left, -1, 12, amber);
         }
         else if (_quiet)
         {
-            DrawString(font, new Vector2(8, 42), "QUIET RUNNING", HorizontalAlignment.Left, -1, 12, cyan);
+            DrawString(font, new Vector2(8, 42), Localization.T("QUIET RUNNING"), HorizontalAlignment.Left, -1, 12, cyan);
         }
 
         // Scope body.

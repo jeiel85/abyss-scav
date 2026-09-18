@@ -10,4 +10,8 @@
     <!-- Engine-independent only: this project must never reference GodotSharp. -->
   </PropertyGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="lang/*.json" />
+  </ItemGroup>
+
 </Project>

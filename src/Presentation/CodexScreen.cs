@@ -35,7 +35,7 @@ public partial class CodexScreen : Control
         SetAnchorsPreset(LayoutPreset.FullRect);
         if (!ContentCatalog.TryBuild(out var catalog, out var errors) || catalog is null)
         {
-            BuildError("Content catalog failed: " + string.Join("; ", errors));
+            BuildError(Localization.T("Content catalog failed: {0}", (object)string.Join("; ", errors)));
             return;
         }
         _catalog = catalog;
@@ -47,11 +47,11 @@ public partial class CodexScreen : Control
             }
             catch (Exception ex)
             {
-                BuildUi("Save folder is unavailable: " + ex.Message);
+                BuildUi(Localization.T("Save folder is unavailable: {0}", (object)ex.Message));
                 return;
             }
         }
-        BuildUi(GameServices.IsInitialized ? "" : "Profile storage unavailable: showing catalog with nothing discovered.");
+        BuildUi(GameServices.IsInitialized ? "" : Localization.T("Profile storage unavailable: showing catalog with nothing discovered."));
         LoadProfileAsync();
     }
 
@@ -101,7 +101,7 @@ public partial class CodexScreen : Control
         box.AddThemeConstantOverride("separation", 6);
         panel.AddChild(box);
 
-        var title = new Label { Text = "CODEX — SURVEY RECORD", HorizontalAlignment = HorizontalAlignment.Center };
+        var title = new Label { Text = Localization.T("CODEX — SURVEY RECORD"), HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 24);
         title.AddThemeColorOverride("font_color", Parchment());
         box.AddChild(title);
@@ -130,30 +130,30 @@ public partial class CodexScreen : Control
         EntryCount = 0;
         var known = new HashSet<string>(_profile.Codex.DiscoveredIds, StringComparer.Ordinal);
 
-        AddSection("CREATURES — survey biological contacts at sea");
+        AddSection(Localization.T("CREATURES — survey biological contacts at sea"));
         foreach (var c in catalog.Creatures.Values.OrderBy(c => c.Id))
         {
             var found = known.Contains(c.Id);
-            AddEntry(c.Id, found ? c.DisplayName : "???", found ? c.Description : "[ silhouette — undiscovered: survey it on a dive ]", found);
+            AddEntry(c.Id, found ? Localization.T(c.DisplayName) : "???", found ? Localization.T(c.Description) : Localization.T("[ silhouette — undiscovered: survey it on a dive ]"), found);
         }
-        AddSection("WATERS — complete a dive in each biome");
+        AddSection(Localization.T("WATERS — complete a dive in each biome"));
         foreach (var b in catalog.Biomes.Values.OrderBy(b => b.Id))
         {
             var found = known.Contains(b.Id);
-            AddEntry(b.Id, found ? b.DisplayName : "???", found ? b.Description : "[ silhouette — undiscovered: dive these waters ]", found);
+            AddEntry(b.Id, found ? Localization.T(b.DisplayName) : "???", found ? Localization.T(b.Description) : Localization.T("[ silhouette — undiscovered: dive these waters ]"), found);
         }
-        AddSection("RELIC TRAITS — secure salvage carrying the trait");
+        AddSection(Localization.T("RELIC TRAITS — secure salvage carrying the trait"));
         foreach (var t in catalog.RelicTraits.Values.OrderBy(t => t.Id))
         {
             var found = known.Contains(t.Id);
-            var detail = found ? $"Threat on recovery: +{t.ThreatOnRecover:F0}" : "[ silhouette — undiscovered: secure marked salvage ]";
-            AddEntry(t.Id, found ? t.DisplayName : "???", detail, found);
+            var detail = found ? Localization.T("Threat on recovery: +{0}", (object)$"{t.ThreatOnRecover:F0}") : Localization.T("[ silhouette — undiscovered: secure marked salvage ]");
+            AddEntry(t.Id, found ? Localization.T(t.DisplayName) : "???", detail, found);
         }
 
         var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         row.AddThemeConstantOverride("separation", 10);
         box.AddChild(row);
-        var back = new Button { Text = "Back", CustomMinimumSize = new Vector2(140, 38) };
+        var back = new Button { Text = Localization.T("Back"), CustomMinimumSize = new Vector2(140, 38) };
         back.Pressed += () => Navigate(AppScene.MainMenu);
         row.AddChild(back);
         _focusOrder.Add(back);
@@ -209,7 +209,7 @@ public partial class CodexScreen : Control
             var found = _catalog.Creatures.Keys.Count(known.Contains)
                 + _catalog.Biomes.Keys.Count(known.Contains)
                 + _catalog.RelicTraits.Keys.Count(known.Contains);
-            _countLabel.Text = $"Discovered {found} / {total} entries";
+            _countLabel.Text = Localization.T("Discovered {0} / {1} entries", found, total);
         }
     }
 
@@ -226,17 +226,17 @@ public partial class CodexScreen : Control
         catch (SaveFutureVersionException ex)
         {
             if (IsInstanceValid(this) && !IsQueuedForDeletion() && _statusLabel is not null && IsInstanceValid(_statusLabel))
-                _statusLabel.Text = $"Profile is from a newer version (schema v{ex.FoundVersion}): showing catalog with nothing discovered.";
+                _statusLabel.Text = Localization.T("Profile is from a newer version (schema v{0}): showing catalog with nothing discovered.", ex.FoundVersion);
         }
         catch (SaveException ex)
         {
             if (IsInstanceValid(this) && !IsQueuedForDeletion() && _statusLabel is not null && IsInstanceValid(_statusLabel))
-                _statusLabel.Text = $"Profile load failed [{ex.Code}]: showing catalog with nothing discovered. {ex.Message}";
+                _statusLabel.Text = Localization.T("Profile load failed [{0}]: showing catalog with nothing discovered. {1}", (object)ex.Code, ex.Message);
         }
         catch (Exception ex)
         {
             if (IsInstanceValid(this) && !IsQueuedForDeletion() && _statusLabel is not null && IsInstanceValid(_statusLabel))
-                _statusLabel.Text = $"Profile load failed ({ex.GetType().Name}): showing catalog with nothing discovered.";
+                _statusLabel.Text = Localization.T("Profile load failed ({0}): showing catalog with nothing discovered.", (object)ex.GetType().Name);
         }
     }
 
@@ -248,24 +248,24 @@ public partial class CodexScreen : Control
         DiscoveredShown = 0;
         var catalog = _catalog;
         var known = new HashSet<string>(_profile.Codex.DiscoveredIds, StringComparer.Ordinal);
-        AddSection("CREATURES — survey biological contacts at sea");
+        AddSection(Localization.T("CREATURES — survey biological contacts at sea"));
         foreach (var c in catalog.Creatures.Values.OrderBy(c => c.Id))
         {
             var found = known.Contains(c.Id);
-            AddEntry(c.Id, found ? c.DisplayName : "???", found ? c.Description : "[ silhouette — undiscovered: survey it on a dive ]", found);
+            AddEntry(c.Id, found ? Localization.T(c.DisplayName) : "???", found ? Localization.T(c.Description) : Localization.T("[ silhouette — undiscovered: survey it on a dive ]"), found);
         }
-        AddSection("WATERS — complete a dive in each biome");
+        AddSection(Localization.T("WATERS — complete a dive in each biome"));
         foreach (var b in catalog.Biomes.Values.OrderBy(b => b.Id))
         {
             var found = known.Contains(b.Id);
-            AddEntry(b.Id, found ? b.DisplayName : "???", found ? b.Description : "[ silhouette — undiscovered: dive these waters ]", found);
+            AddEntry(b.Id, found ? Localization.T(b.DisplayName) : "???", found ? Localization.T(b.Description) : Localization.T("[ silhouette — undiscovered: dive these waters ]"), found);
         }
-        AddSection("RELIC TRAITS — secure salvage carrying the trait");
+        AddSection(Localization.T("RELIC TRAITS — secure salvage carrying the trait"));
         foreach (var t in catalog.RelicTraits.Values.OrderBy(t => t.Id))
         {
             var found = known.Contains(t.Id);
-            var detail = found ? $"Threat on recovery: +{t.ThreatOnRecover:F0}" : "[ silhouette — undiscovered: secure marked salvage ]";
-            AddEntry(t.Id, found ? t.DisplayName : "???", detail, found);
+            var detail = found ? Localization.T("Threat on recovery: +{0}", (object)$"{t.ThreatOnRecover:F0}") : Localization.T("[ silhouette — undiscovered: secure marked salvage ]");
+            AddEntry(t.Id, found ? Localization.T(t.DisplayName) : "???", detail, found);
         }
         RefreshTexts();
     }
@@ -281,7 +281,7 @@ public partial class CodexScreen : Control
         }
         if (!svc.Navigate(target))
         {
-            if (_statusLabel is not null) _statusLabel.Text = $"Cannot navigate to {target} from here.";
+            if (_statusLabel is not null) _statusLabel.Text = Localization.T("Cannot navigate to {0} from here.", target);
             GodotLogBridge.Warn(GameServices.Logger, $"CodexScreen navigate to {target} refused.");
         }
     }

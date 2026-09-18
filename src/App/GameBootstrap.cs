@@ -11,8 +11,14 @@ namespace AbyssScav.App;
 /// </summary>
 public partial class GameBootstrap : Node
 {
+    private LocalizationService? _localization;
+
     public override void _Ready()
     {
+        var localization = new LocalizationService();
+        Localization.Initialize(localization);
+        _localization = localization;
+
         var allArgs = new List<string>(OS.GetCmdlineArgs());
         allArgs.AddRange(OS.GetCmdlineUserArgs());
         var bootOptions = BootOptions.Parse(allArgs);
@@ -27,10 +33,10 @@ public partial class GameBootstrap : Node
             GD.PushError($"[{ErrorCodes.BootSessionLock}] Cannot prepare local storage: {LocalLogger.Sanitize(ex.GetType().Name)}.");
             ShowBootError(
                 ErrorCodes.BootSessionLock,
-                "Local storage is unavailable, so the game cannot start.",
+                Localization.T("Local storage is unavailable, so the game cannot start."),
                 bootOptions.SafeMode
-                    ? "Check disk space and permissions, then relaunch."
-                    : "Check disk space and permissions, then relaunch. You can also try --safe-mode (720p windowed, low graphics).");
+                    ? Localization.T("Check disk space and permissions, then relaunch.")
+                    : Localization.T("Check disk space and permissions, then relaunch. You can also try --safe-mode (720p windowed, low graphics)."));
             return;
         }
 
@@ -46,8 +52,8 @@ public partial class GameBootstrap : Node
             GD.PushError($"[{ErrorCodes.BootLogInit}] Cannot initialize log file: {LocalLogger.Sanitize(ex.GetType().Name)}.");
             ShowBootError(
                 ErrorCodes.BootLogInit,
-                "Logging could not be initialized, so the game cannot start.",
-                "Check disk space and permissions, then relaunch.");
+                Localization.T("Logging could not be initialized, so the game cannot start."),
+                Localization.T("Check disk space and permissions, then relaunch."));
             return;
         }
 
@@ -63,8 +69,8 @@ public partial class GameBootstrap : Node
             GD.PushError(ex.Message);
             ShowBootError(
                 ErrorCodes.BootSessionLock,
-                "Another instance is already running with this profile.",
-                "Close the other instance, then relaunch. No files were changed.");
+                Localization.T("Another instance is already running with this profile."),
+                Localization.T("Close the other instance, then relaunch. No files were changed."));
             return;
         }
         catch (Exception ex)
@@ -75,8 +81,8 @@ public partial class GameBootstrap : Node
             GD.PushError($"[{ErrorCodes.BootSessionLock}] Cannot claim the session lock.");
             ShowBootError(
                 ErrorCodes.BootSessionLock,
-                "The session marker could not be claimed, so the game cannot start.",
-                "Check disk permissions, then relaunch.");
+                Localization.T("The session marker could not be claimed, so the game cannot start."),
+                Localization.T("Check disk permissions, then relaunch."));
             return;
         }
 
@@ -92,10 +98,10 @@ public partial class GameBootstrap : Node
             GD.PushError($"[{ErrorCodes.BootConfigCorrupt}] Settings load failed.");
             ShowBootError(
                 ErrorCodes.BootConfigCorrupt,
-                "Settings could not be loaded, so the game cannot start.",
+                Localization.T("Settings could not be loaded, so the game cannot start."),
                 bootOptions.SafeMode
-                    ? "Check disk space and permissions, then relaunch."
-                    : "Check disk space and permissions, then relaunch. You can also try --safe-mode (720p windowed, low graphics).");
+                    ? Localization.T("Check disk space and permissions, then relaunch.")
+                    : Localization.T("Check disk space and permissions, then relaunch. You can also try --safe-mode (720p windowed, low graphics)."));
             return;
         }
 
@@ -117,14 +123,15 @@ public partial class GameBootstrap : Node
                 GD.PushError($"[{ErrorCodes.BootConfigCorrupt}] {load.Notice}");
                 ShowBootError(
                     ErrorCodes.BootConfigCorrupt,
-                    load.Notice ?? "Settings could not be loaded.",
+                    load.Notice ?? Localization.T("Settings could not be loaded."),
                     bootOptions.SafeMode
-                        ? "Check disk space and permissions, then relaunch."
-                        : "Check disk space and permissions, then relaunch. You can also try --safe-mode (720p windowed, low graphics).");
+                        ? Localization.T("Check disk space and permissions, then relaunch.")
+                        : Localization.T("Check disk space and permissions, then relaunch. You can also try --safe-mode (720p windowed, low graphics)."));
                 return;
         }
 
         var effective = bootOptions.SafeMode ? SafeModePolicy.Apply(load.Settings) : load.Settings;
+        _localization?.SetLanguage(load.Settings.Language);
         if (bootOptions.SafeMode)
         {
             // Safe-mode overrides stay in memory only: never persist them automatically.
@@ -144,8 +151,8 @@ public partial class GameBootstrap : Node
             GD.PushError($"[{ErrorCodes.ContentSceneMissing}] SceneTree unavailable at boot.");
             ShowBootError(
                 ErrorCodes.ContentSceneMissing,
-                "The engine scene tree is unavailable, so the game cannot start.",
-                "Relaunch the game.");
+                Localization.T("The engine scene tree is unavailable, so the game cannot start."),
+                Localization.T("Relaunch the game."));
             return;
         }
 
@@ -163,6 +170,7 @@ public partial class GameBootstrap : Node
         AttachSessionGuard(sessionLock, logger);
 
         var registry = new Foundation.DependencyRegistry();
+        registry.RegisterInstance(localization);
         registry.RegisterInstance(paths);
         registry.RegisterInstance(logger);
         registry.RegisterInstance(sessionLock);
@@ -183,8 +191,8 @@ public partial class GameBootstrap : Node
             GD.PushError(flowError);
             ShowBootError(
                 ErrorCodes.ContentSceneMissing,
-                "The main menu could not be reached.",
-                "Relaunch the game.");
+                Localization.T("The main menu could not be reached."),
+                Localization.T("Relaunch the game."));
             return;
         }
 
@@ -228,7 +236,7 @@ public partial class GameBootstrap : Node
         box.AddThemeConstantOverride("separation", 10);
         center.AddChild(box);
 
-        var title = new Label { Text = "ABYSS SCAV — Boot error", HorizontalAlignment = HorizontalAlignment.Center };
+        var title = new Label { Text = Localization.T("ABYSS SCAV — Boot error"), HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 28);
         box.AddChild(title);
 
@@ -253,7 +261,7 @@ public partial class GameBootstrap : Node
         };
         box.AddChild(hintLabel);
 
-        var quit = new Button { Text = "Quit", CustomMinimumSize = new Vector2(200, 36) };
+        var quit = new Button { Text = Localization.T("Quit"), CustomMinimumSize = new Vector2(200, 36) };
         quit.Pressed += () => GetTree()?.Quit();
         var quitRow = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         quitRow.AddChild(quit);

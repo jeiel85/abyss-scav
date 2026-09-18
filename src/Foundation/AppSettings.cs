@@ -19,15 +19,17 @@ public sealed record AppSettings(
     [property: JsonPropertyName("schema_version")] int SchemaVersion,
     [property: JsonPropertyName("graphics")] GraphicsSettings Graphics,
     [property: JsonPropertyName("master_volume_percent")] int MasterVolumePercent,
-    [property: JsonPropertyName("auto_reconnect_last_session")] bool AutoReconnectLastSession)
+    [property: JsonPropertyName("auto_reconnect_last_session")] bool AutoReconnectLastSession,
+    [property: JsonPropertyName("language")] string Language)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public static AppSettings Default() => new(
         CurrentSchemaVersion,
         GraphicsSettings.Default(),
         80,
-        false);
+        false,
+        "en");
 
     /// <summary>Clamp/whitelist raw values so a hand-edited file cannot crash boot.</summary>
     public AppSettings Normalized()
@@ -37,6 +39,8 @@ public sealed record AppSettings(
         var mode = Graphics.WindowMode is "Windowed" or "Fullscreen" or "Maximized" ? Graphics.WindowMode : "Windowed";
         var quality = Graphics.Quality is "Low" or "Medium" or "High" ? Graphics.Quality : "Medium";
         var volume = Math.Clamp(MasterVolumePercent, 0, 100);
-        return this with { Graphics = new GraphicsSettings(width, height, mode, quality), MasterVolumePercent = volume };
+        // v1 files carry no language (deserializes as null): whitelist to "en".
+        var lang = Language is "en" or "ko" ? Language : "en";
+        return this with { Graphics = new GraphicsSettings(width, height, mode, quality), MasterVolumePercent = volume, Language = lang };
     }
 }

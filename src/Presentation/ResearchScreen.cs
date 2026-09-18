@@ -51,7 +51,7 @@ public partial class ResearchScreen : Control
         SetAnchorsPreset(LayoutPreset.FullRect);
         if (!ContentCatalog.TryBuild(out var catalog, out var errors) || catalog is null)
         {
-            BuildError("Content catalog failed: " + string.Join("; ", errors));
+            BuildError(Localization.T("Content catalog failed: {0}", (object)string.Join("; ", errors)));
             return;
         }
         _catalog = catalog;
@@ -64,7 +64,7 @@ public partial class ResearchScreen : Control
             catch (Exception ex)
             {
                 _saveUsable = false;
-                BuildUi("Save folder is unavailable: " + ex.Message);
+                BuildUi(Localization.T("Save folder is unavailable: {0}", (object)ex.Message));
                 return;
             }
         }
@@ -74,7 +74,7 @@ public partial class ResearchScreen : Control
         }
         _cts?.Dispose();
         _cts = new CancellationTokenSource();
-        BuildUi(_saveUsable ? "" : "Profile storage unavailable: showing catalog read-only; purchases disabled.");
+        BuildUi(_saveUsable ? "" : Localization.T("Profile storage unavailable: showing catalog read-only; purchases disabled."));
         LoadProfileAsync();
     }
 
@@ -131,7 +131,7 @@ public partial class ResearchScreen : Control
         box.AddThemeConstantOverride("separation", 6);
         panel.AddChild(box);
 
-        var title = new Label { Text = "RESEARCH — BLUEPRINT ARCHIVE", HorizontalAlignment = HorizontalAlignment.Center };
+        var title = new Label { Text = Localization.T("RESEARCH — BLUEPRINT ARCHIVE"), HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 24);
         title.AddThemeColorOverride("font_color", Parchment());
         box.AddChild(title);
@@ -171,7 +171,7 @@ public partial class ResearchScreen : Control
             col.AddThemeConstantOverride("separation", 4);
             col.SizeFlagsHorizontal = SizeFlags.ExpandFill;
             columns.AddChild(col);
-            var header = new Label { Text = branch.ToUpperInvariant(), HorizontalAlignment = HorizontalAlignment.Center };
+            var header = new Label { Text = Localization.T(branch).ToUpperInvariant(), HorizontalAlignment = HorizontalAlignment.Center };
             header.AddThemeFontSizeOverride("font_size", 16);
             header.AddThemeColorOverride("font_color", Cyan());
             col.AddChild(header);
@@ -185,7 +185,7 @@ public partial class ResearchScreen : Control
 
         var footer = new Label
         {
-            Text = "Blueprints are permanent unlocks, never consumed by equipping. 6 of 24 modules have real in-run effects (equip them at Contract Select); the rest are unavailable for new purchase until their effects exist — owned copies are retained.",
+            Text = Localization.T("Blueprints are permanent unlocks, never consumed by equipping. 6 of 24 modules have real in-run effects (equip them at Contract Select); the rest are unavailable for new purchase until their effects exist — owned copies are retained."),
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             HorizontalAlignment = HorizontalAlignment.Center,
         };
@@ -196,7 +196,7 @@ public partial class ResearchScreen : Control
         var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         row.AddThemeConstantOverride("separation", 10);
         box.AddChild(row);
-        var back = new Button { Text = "Back", CustomMinimumSize = new Vector2(140, 38) };
+        var back = new Button { Text = Localization.T("Back"), CustomMinimumSize = new Vector2(140, 38) };
         back.Pressed += () => Navigate(AppScene.MainMenu);
         row.AddChild(back);
         _backButton = back;
@@ -221,7 +221,7 @@ public partial class ResearchScreen : Control
         var inner = new VBoxContainer();
         inner.AddThemeConstantOverride("separation", 2);
         frame.AddChild(inner);
-        var name = new Label { Text = $"{m.Id}\nTier {m.Tier} · {m.Category} · {m.ResearchCost} RD\n{ModuleLoadout.Describe(m.Id)}", AutowrapMode = TextServer.AutowrapMode.WordSmart };
+        var name = new Label { Text = Localization.T("{0}\nTier {1} · {2} · {3} RD\n{4}", (object)m.Id, m.Tier, Localization.T(m.Category), m.ResearchCost, Localization.T(ModuleLoadout.Describe(m.Id))), AutowrapMode = TextServer.AutowrapMode.WordSmart };
         name.AddThemeFontSizeOverride("font_size", 12);
         name.AddThemeColorOverride("font_color", Parchment());
         inner.AddChild(name);
@@ -229,7 +229,7 @@ public partial class ResearchScreen : Control
         state.AddThemeFontSizeOverride("font_size", 12);
         state.AddThemeColorOverride("font_color", Dim());
         inner.AddChild(state);
-        var buy = new Button { Text = $"Unlock — {m.ResearchCost} RD", CustomMinimumSize = new Vector2(0, 30) };
+        var buy = new Button { Text = Localization.T("Unlock — {0} RD", m.ResearchCost), CustomMinimumSize = new Vector2(0, 30) };
         var id = m.Id;
         var cost = m.ResearchCost;
         buy.Pressed += () => BuyModule(id, cost);
@@ -254,8 +254,8 @@ public partial class ResearchScreen : Control
         var byChoice = GameServices.WritesSuspendedByChoice;
         if (_balanceLabel is not null && IsInstanceValid(_balanceLabel))
         {
-            var suffix = byChoice ? " (not saved by choice)" : _saveUsable ? "" : " (unsaved session)";
-            _balanceLabel.Text = $"Research data: {_profile.Currencies.ResearchData} RD{suffix}";
+            var suffix = byChoice ? Localization.T(" (not saved by choice)") : _saveUsable ? "" : Localization.T(" (unsaved session)");
+            _balanceLabel.Text = Localization.T("Research data: {0} RD{1}", _profile.Currencies.ResearchData, (object)suffix);
         }
         if (_catalog is null) return;
         var owned = new HashSet<string>(_profile.Unlocks.Blueprints, StringComparer.Ordinal);
@@ -268,40 +268,40 @@ public partial class ResearchScreen : Control
             if (owned.Contains(kv.Key))
             {
                 row.State.Text = supported
-                    ? "Unlocked — permanent blueprint; equip one per category at Contract Select."
-                    : "Owned — retained on your profile; no in-run effect yet, not equippable.";
+                    ? Localization.T("Unlocked — permanent blueprint; equip one per category at Contract Select.")
+                    : Localization.T("Owned — retained on your profile; no in-run effect yet, not equippable.");
                 row.Buy.Disabled = true;
                 row.Buy.FocusMode = FocusModeEnum.None;
-                row.Buy.Text = "Unlocked";
+                row.Buy.Text = Localization.T("Unlocked");
             }
             else if (!supported)
             {
-                row.State.Text = "Unavailable — in-run effect not implemented; new purchase disabled (nothing charged).";
+                row.State.Text = Localization.T("Unavailable — in-run effect not implemented; new purchase disabled (nothing charged).");
                 row.Buy.Disabled = true;
                 row.Buy.FocusMode = FocusModeEnum.None;
-                row.Buy.Text = "Unavailable";
+                row.Buy.Text = Localization.T("Unavailable");
             }
             else if (byChoice)
             {
-                row.State.Text = "Not saved by choice: purchases disabled for this unsaved session (nothing charged).";
+                row.State.Text = Localization.T("Not saved by choice: purchases disabled for this unsaved session (nothing charged).");
                 row.Buy.Disabled = true;
                 row.Buy.FocusMode = FocusModeEnum.None;
             }
             else if (!_saveUsable)
             {
-                row.State.Text = "Purchases disabled: profile storage unavailable.";
+                row.State.Text = Localization.T("Purchases disabled: profile storage unavailable.");
                 row.Buy.Disabled = true;
                 row.Buy.FocusMode = FocusModeEnum.None;
             }
             else if (_profile.Currencies.ResearchData < m.ResearchCost)
             {
-                row.State.Text = $"Needs {m.ResearchCost - _profile.Currencies.ResearchData} more RD.";
+                row.State.Text = Localization.T("Needs {0} more RD.", m.ResearchCost - _profile.Currencies.ResearchData);
                 row.Buy.Disabled = _savingCount > 0;
                 row.Buy.FocusMode = _savingCount > 0 ? FocusModeEnum.None : FocusModeEnum.All;
             }
             else
             {
-                row.State.Text = "Available — deducts research data once; blueprint is permanent.";
+                row.State.Text = Localization.T("Available — deducts research data once; blueprint is permanent.");
                 row.Buy.Disabled = _savingCount > 0;
                 row.Buy.FocusMode = _savingCount > 0 ? FocusModeEnum.None : FocusModeEnum.All;
             }
@@ -317,8 +317,8 @@ public partial class ResearchScreen : Control
         {
             _backButton.Disabled = _savingCount > 0;
             _backButton.TooltipText = _savingCount > 0
-                ? "Purchase write in flight — exit held until it completes."
-                : "Return to menu.";
+                ? Localization.T("Purchase write in flight — exit held until it completes.")
+                : Localization.T("Return to menu.");
         }
     }
 
@@ -338,7 +338,7 @@ public partial class ResearchScreen : Control
             _profile = loaded;
             _saveUsable = true;
             if (GameServices.WritesSuspendedByChoice)
-                Say("Not saved by choice: catalog is read-only for this unsaved session; purchases disabled.");
+                Say(Localization.T("Not saved by choice: catalog is read-only for this unsaved session; purchases disabled."));
             RefreshTexts();
         }
         catch (OperationCanceledException)
@@ -350,8 +350,8 @@ public partial class ResearchScreen : Control
             if (ct.IsCancellationRequested || !IsInstanceValid(this)) return;
             _saveUsable = false;
             Say(GameServices.WritesSuspendedByChoice
-                ? "Not saved by choice: purchases disabled for this unsaved session (nothing charged)."
-                : $"Profile is from a newer version (schema v{ex.FoundVersion}): catalog is read-only, purchases disabled.");
+                ? Localization.T("Not saved by choice: purchases disabled for this unsaved session (nothing charged).")
+                : Localization.T("Profile is from a newer version (schema v{0}): catalog is read-only, purchases disabled.", ex.FoundVersion));
             RefreshTexts();
         }
         catch (SaveException ex)
@@ -359,8 +359,8 @@ public partial class ResearchScreen : Control
             if (ct.IsCancellationRequested || !IsInstanceValid(this)) return;
             _saveUsable = false;
             Say(GameServices.WritesSuspendedByChoice
-                ? "Not saved by choice: purchases disabled for this unsaved session (nothing charged)."
-                : $"Profile load failed [{ex.Code}]: catalog is read-only, purchases disabled. {ex.Message}");
+                ? Localization.T("Not saved by choice: purchases disabled for this unsaved session (nothing charged).")
+                : Localization.T("Profile load failed [{0}]: catalog is read-only, purchases disabled. {1}", (object)ex.Code, ex.Message));
             RefreshTexts();
         }
         catch (Exception ex)
@@ -368,8 +368,8 @@ public partial class ResearchScreen : Control
             if (ct.IsCancellationRequested || !IsInstanceValid(this)) return;
             _saveUsable = false;
             Say(GameServices.WritesSuspendedByChoice
-                ? "Not saved by choice: purchases disabled for this unsaved session (nothing charged)."
-                : $"Profile load failed ({ex.GetType().Name}): catalog is read-only, purchases disabled.");
+                ? Localization.T("Not saved by choice: purchases disabled for this unsaved session (nothing charged).")
+                : Localization.T("Profile load failed ({0}): catalog is read-only, purchases disabled.", (object)ex.GetType().Name));
             RefreshTexts();
         }
     }
@@ -379,34 +379,34 @@ public partial class ResearchScreen : Control
         if (!IsInstanceValid(this)) return;
         if (GameServices.WritesSuspendedByChoice)
         {
-            Say("Not saved by choice: purchases disabled for this unsaved session (nothing charged).");
+            Say(Localization.T("Not saved by choice: purchases disabled for this unsaved session (nothing charged)."));
             RefreshTexts();
             return;
         }
         if (_store is null || !_saveUsable)
         {
-            Say("Purchases disabled: profile storage is unavailable.");
+            Say(Localization.T("Purchases disabled: profile storage is unavailable."));
             return;
         }
         if (!ModuleLoadout.IsSupported(moduleId))
         {
-            Say($"Unavailable: {moduleId} has no implemented in-run effect; new purchase disabled, nothing charged.");
+            Say(Localization.T("Unavailable: {0} has no implemented in-run effect; new purchase disabled, nothing charged.", (object)moduleId));
             RefreshTexts();
             return;
         }
         if (_profile.Unlocks.Blueprints.Contains(moduleId, StringComparer.Ordinal))
         {
-            Say("Already unlocked: duplicate purchase refused.");
+            Say(Localization.T("Already unlocked: duplicate purchase refused."));
             RefreshTexts();
             return;
         }
         if (_profile.Currencies.ResearchData < cost)
         {
-            Say($"Insufficient research data: need {cost} RD, have {_profile.Currencies.ResearchData} RD.");
+            Say(Localization.T("Insufficient research data: need {0} RD, have {1} RD.", cost, _profile.Currencies.ResearchData));
             return;
         }
         var ct = _cts?.Token ?? CancellationToken.None;
-        Say($"Saving {moduleId}…");
+        Say(Localization.T("Saving {0}…", (object)moduleId));
         SetRowBusy(moduleId, true);
         _savingCount++;
         UpdateBusy();
@@ -438,19 +438,19 @@ public partial class ResearchScreen : Control
             if (alreadyOwned)
             {
                 _profile = updated;
-                Say("Already unlocked: another writer recorded it first; nothing charged.");
+                Say(Localization.T("Already unlocked: another writer recorded it first; nothing charged."));
             }
             else if (insufficient)
             {
                 _profile = updated;
-                Say($"Insufficient research data on the saved profile: need {cost} RD, have {updated.Currencies.ResearchData} RD.");
+                Say(Localization.T("Insufficient research data on the saved profile: need {0} RD, have {1} RD.", cost, updated.Currencies.ResearchData));
             }
             else
             {
                 // Surface the committed write result; the next menu reloads the
                 // same live profile, so the blueprint is visible everywhere.
                 _profile = updated;
-                Say($"Unlocked {moduleId}: permanent blueprint recorded (never consumed by equipping). {ModuleLoadout.Describe(moduleId)}");
+                Say(Localization.T("Unlocked {0}: permanent blueprint recorded (never consumed by equipping). {1}", (object)moduleId, Localization.T(ModuleLoadout.Describe(moduleId))));
                 if (GameServices.IsInitialized)
                 {
                     GodotLogBridge.Info(GameServices.Logger, $"Research purchased {moduleId} for {cost} RD.");
@@ -466,18 +466,18 @@ public partial class ResearchScreen : Control
         {
             if (ct.IsCancellationRequested || !IsInstanceValid(this)) return;
             _saveUsable = false;
-            Say($"Profile is from a newer version (schema v{ex.FoundVersion}): purchases disabled, nothing charged.");
+            Say(Localization.T("Profile is from a newer version (schema v{0}): purchases disabled, nothing charged.", ex.FoundVersion));
             RefreshTexts();
         }
         catch (SaveException ex)
         {
             if (ct.IsCancellationRequested || !IsInstanceValid(this)) return;
-            Say($"Purchase failed [{ex.Code}]: nothing charged. {ex.Message}");
+            Say(Localization.T("Purchase failed [{0}]: nothing charged. {1}", (object)ex.Code, ex.Message));
         }
         catch (Exception ex)
         {
             if (ct.IsCancellationRequested || !IsInstanceValid(this)) return;
-            Say($"Purchase failed ({ex.GetType().Name}): nothing charged.");
+            Say(Localization.T("Purchase failed ({0}): nothing charged.", (object)ex.GetType().Name));
         }
         finally
         {
@@ -517,7 +517,7 @@ public partial class ResearchScreen : Control
         }
         if (!svc.Navigate(target))
         {
-            Say($"Cannot navigate to {target} from here.");
+            Say(Localization.T("Cannot navigate to {0} from here.", target));
             GodotLogBridge.Warn(GameServices.Logger, $"ResearchScreen navigate to {target} refused.");
         }
     }

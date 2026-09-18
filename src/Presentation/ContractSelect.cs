@@ -47,7 +47,7 @@ public partial class ContractSelect : Control
         SetAnchorsPreset(LayoutPreset.FullRect);
         if (!ContentCatalog.TryBuild(out var catalog, out var errors) || catalog is null)
         {
-            BuildError("Content catalog failed: " + string.Join("; ", errors));
+            BuildError(Localization.T("Content catalog failed: {0}", (object)string.Join("; ", errors)));
             return;
         }
         _catalog = catalog;
@@ -136,12 +136,12 @@ public partial class ContractSelect : Control
         box.AddThemeConstantOverride("separation", 6);
         panel.AddChild(box);
 
-        var title = new Label { Text = "SOLO DIVE — CONTRACT & LOADOUT", HorizontalAlignment = HorizontalAlignment.Center };
+        var title = new Label { Text = Localization.T("SOLO DIVE — CONTRACT & LOADOUT"), HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 24);
         title.AddThemeColorOverride("font_color", Parchment());
         box.AddChild(title);
 
-        var sub = new Label { Text = "Generate · validate · then dive. Solo dive only.", HorizontalAlignment = HorizontalAlignment.Center };
+        var sub = new Label { Text = Localization.T("Generate · validate · then dive. Solo dive only."), HorizontalAlignment = HorizontalAlignment.Center };
         sub.AddThemeFontSizeOverride("font_size", 13);
         sub.AddThemeColorOverride("font_color", Cyan());
         box.AddChild(sub);
@@ -158,15 +158,15 @@ public partial class ContractSelect : Control
         content.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         scroll.AddChild(content);
 
-        _biome = LabeledOption(content, "Waters (biome)", catalog.Biomes.Values.OrderBy(b => b.Id).Select(b => $"{b.Id}|{b.DisplayName}").ToList());
-        _contract = LabeledOption(content, "Contract", new List<string>());
-        _frame = LabeledOption(content, "Frame", catalog.Frames.Values.OrderBy(f => f.Id).Select(f => $"{f.Id}|{f.DisplayName}").ToList());
-        _difficulty = LabeledOption(content, "Difficulty", catalog.Difficulties.Values.OrderBy(d => d.Id).Select(d => $"{d.Id}|{d.DisplayName}").ToList());
-        _insurance = LabeledOption(content, "Insurance", new List<string>
+        _biome = LabeledOption(content, Localization.T("Waters (biome)"), catalog.Biomes.Values.OrderBy(b => b.Id).Select(b => $"{b.Id}|{Localization.T(b.DisplayName)}").ToList());
+        _contract = LabeledOption(content, Localization.T("Contract"), new List<string>());
+        _frame = LabeledOption(content, Localization.T("Frame"), catalog.Frames.Values.OrderBy(f => f.Id).Select(f => $"{f.Id}|{Localization.T(f.DisplayName)}").ToList());
+        _difficulty = LabeledOption(content, Localization.T("Difficulty"), catalog.Difficulties.Values.OrderBy(d => d.Id).Select(d => $"{d.Id}|{Localization.T(d.DisplayName)}").ToList());
+        _insurance = LabeledOption(content, Localization.T("Insurance"), new List<string>
         {
-            $"{RunSimulation.InsuranceNone}|No cover (20% retention)",
-            $"{RunSimulation.InsuranceBasic}|Basic (50% retention)",
-            $"{RunSimulation.InsurancePremium}|Premium (70% retention)",
+            $"{RunSimulation.InsuranceNone}|{Localization.T("No cover (20% retention)")}",
+            $"{RunSimulation.InsuranceBasic}|{Localization.T("Basic (50% retention)")}",
+            $"{RunSimulation.InsurancePremium}|{Localization.T("Premium (70% retention)")}",
         });
         // Paid policies are priced (docs/05 §4: 8%/15% of departure cost) but
         // no departure-cost charge flow exists yet, so selecting them would be
@@ -175,7 +175,7 @@ public partial class ContractSelect : Control
         if (_insurance is not null)
         {
             _insurance.Disabled = true;
-            _insurance.TooltipText = "Paid insurance costs 8%/15% of departure cost (docs/05 §4), but no charge flow exists yet — selecting it would grant free coverage. Only the free policy is available.";
+            _insurance.TooltipText = Localization.T("Paid insurance costs 8%/15% of departure cost (docs/05 §4), but no charge flow exists yet — selecting it would grant free coverage. Only the free policy is available.");
         }
         _biome.ItemSelected += _ => { RefreshContracts(); UpdateDescription(); };
         _contract.ItemSelected += _ => UpdateDescription();
@@ -185,7 +185,7 @@ public partial class ContractSelect : Control
         SelectId(_frame, "frame.skiff");
         SelectId(_insurance, RunSimulation.InsuranceNone);
 
-        var seedLabel = new Label { Text = "Run seed (number)" };
+        var seedLabel = new Label { Text = Localization.T("Run seed (number)") };
         seedLabel.AddThemeColorOverride("font_color", Parchment());
         content.AddChild(seedLabel);
         var seedRow = new HBoxContainer();
@@ -193,32 +193,32 @@ public partial class ContractSelect : Control
         content.AddChild(seedRow);
         _seed = new LineEdit { Text = "1234", CustomMinimumSize = new Vector2(200, 32) };
         seedRow.AddChild(_seed);
-        var reroll = new Button { Text = "Randomize" };
+        var reroll = new Button { Text = Localization.T("Randomize") };
         reroll.Pressed += () => { if (_seed is not null) _seed.Text = new Random().Next(1, 999999).ToString(); };
         seedRow.AddChild(reroll);
 
-        var modLabel = new Label { Text = "Contract modifiers (optional)" };
+        var modLabel = new Label { Text = Localization.T("Contract modifiers (optional)") };
         modLabel.AddThemeColorOverride("font_color", Parchment());
         content.AddChild(modLabel);
         var mods = new VBoxContainer();
         content.AddChild(mods);
         foreach (var m in catalog.Modifiers.Values.OrderBy(m => m.Id))
         {
-            var cb = new CheckBox { Text = $"{m.DisplayName} ({m.Id})" };
+            var cb = new CheckBox { Text = $"{Localization.T(m.DisplayName)} ({m.Id})" };
             cb.AddThemeColorOverride("font_color", Parchment());
-            cb.TooltipText = m.DomainEffect;
+            cb.TooltipText = Localization.T(m.DomainEffect);
             mods.AddChild(cb);
             _modBoxes.Add(cb);
             cb.SetMeta("mod_id", m.Id);
         }
 
-        var loadoutLabel = new Label { Text = "Module loadout — one slot per category, owned blueprints only" };
+        var loadoutLabel = new Label { Text = Localization.T("Module loadout — one slot per category, owned blueprints only") };
         loadoutLabel.AddThemeColorOverride("font_color", Parchment());
         content.AddChild(loadoutLabel);
         foreach (var category in LoadoutCategories)
         {
-            var slot = LabeledOption(content, category, new List<string> { "|Empty — stock loadout" });
-            slot.TooltipText = "Only owned blueprints with implemented in-run effects are listed. Blueprints are permanent: equipping never consumes them.";
+            var slot = LabeledOption(content, Localization.T(category), new List<string> { $"|{Localization.T("Empty — stock loadout")}" });
+            slot.TooltipText = Localization.T("Only owned blueprints with implemented in-run effects are listed. Blueprints are permanent: equipping never consumes them.");
             _moduleSlots[category] = slot;
             var captured = slot;
             captured.ItemSelected += _ => UpdateLoadoutDescription();
@@ -226,7 +226,7 @@ public partial class ContractSelect : Control
         _loadoutDesc = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart };
         _loadoutDesc.AddThemeFontSizeOverride("font_size", 13);
         _loadoutDesc.AddThemeColorOverride("font_color", Cyan());
-        _loadoutDesc.Text = "Stock loadout — no modules equipped.";
+        _loadoutDesc.Text = Localization.T("Stock loadout — no modules equipped.");
         content.AddChild(_loadoutDesc);
 
         _desc = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart };
@@ -242,12 +242,12 @@ public partial class ContractSelect : Control
         var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         row.AddThemeConstantOverride("separation", 10);
         box.AddChild(row);
-        var back = new Button { Text = "Back", CustomMinimumSize = new Vector2(140, 38) };
+        var back = new Button { Text = Localization.T("Back"), CustomMinimumSize = new Vector2(140, 38) };
         back.Pressed += () => Navigate(AppScene.MainMenu);
-        _launch = new Button { Text = "Generate & Dive", CustomMinimumSize = new Vector2(200, 38) };
+        _launch = new Button { Text = Localization.T("Generate & Dive"), CustomMinimumSize = new Vector2(200, 38) };
         _launch.Pressed += OnLaunch;
-        var tutorial = new Button { Text = "Tutorial: The First Ping", CustomMinimumSize = new Vector2(220, 38) };
-        tutorial.TooltipText = "Guided first dive: fixed waters, contract, seed 4242, and skiff. Steps are skippable; progress resumes.";
+        var tutorial = new Button { Text = Localization.T("Tutorial: The First Ping"), CustomMinimumSize = new Vector2(220, 38) };
+        tutorial.TooltipText = Localization.T("Guided first dive: fixed waters, contract, seed 4242, and skiff. Steps are skippable; progress resumes.");
         tutorial.Pressed += OnTutorialLaunch;
         row.AddChild(back);
         row.AddChild(_launch);
@@ -278,14 +278,14 @@ public partial class ContractSelect : Control
         _contract.Clear();
         foreach (var c in _catalog.Contracts.Values.Where(c => c.AllowedBiomeIds.Contains(biomeId)).OrderBy(c => c.Id))
         {
-            _contract.AddItem($"{c.Archetype} — {c.Description}");
+            _contract.AddItem($"{Localization.T(c.Archetype)} — {Localization.T(c.Description)}");
             _contract.SetItemMetadata(_contract.ItemCount - 1, c.Id);
         }
         if (_contract.ItemCount == 0)
         {
             foreach (var c in _catalog.Contracts.Values.OrderBy(c => c.Id))
             {
-                _contract.AddItem($"{c.Archetype} (elsewhere) — {c.Id}");
+                _contract.AddItem(Localization.T("{0} (elsewhere) — {1}", (object)Localization.T(c.Archetype), c.Id));
                 _contract.SetItemMetadata(_contract.ItemCount - 1, c.Id);
             }
         }
@@ -298,19 +298,19 @@ public partial class ContractSelect : Control
         var parts = new List<string>();
         if (_biome is not null && _catalog.Biomes.TryGetValue(SelectedId(_biome), out var b))
         {
-            parts.Add($"{b.DisplayName}: {b.Description} Depth {b.MinDepthMeters:F0}–{b.MaxDepthMeters:F0} m.");
+            parts.Add(Localization.T("{0}: {1} Depth {2}–{3} m.", Localization.T(b.DisplayName), Localization.T(b.Description), $"{b.MinDepthMeters:F0}", $"{b.MaxDepthMeters:F0}"));
         }
         if (_contract is not null)
         {
             var cid = SelectedId(_contract);
             if (_catalog.Contracts.TryGetValue(cid, out var c))
             {
-                parts.Add($"{c.Archetype} (tier {c.Tier}, {c.BasePayout} cr): {c.Description} {c.DomainInteraction}");
+                parts.Add(Localization.T("{0} (tier {1}, {2} cr): {3} {4}", Localization.T(c.Archetype), c.Tier, c.BasePayout, Localization.T(c.Description), Localization.T(c.DomainInteraction)));
             }
         }
         if (_frame is not null && _catalog.Frames.TryGetValue(SelectedId(_frame), out var f))
         {
-            parts.Add($"{f.DisplayName}: hull {f.MaxHull:F0}, power {f.PowerSupply:F0} PU, cargo {f.CargoSlots} slots / {f.CargoMaxMassKg:F0} kg.");
+            parts.Add(Localization.T("{0}: hull {1}, power {2} PU, cargo {3} slots / {4} kg.", Localization.T(f.DisplayName), $"{f.MaxHull:F0}", $"{f.PowerSupply:F0}", f.CargoSlots, $"{f.CargoMaxMassKg:F0}"));
         }
         _desc.Text = string.Join("\n", parts);
     }
@@ -321,7 +321,7 @@ public partial class ContractSelect : Control
         if (!IsInstanceValid(_status)) return;
         if (!ulong.TryParse(_seed?.Text.Trim() ?? "", out var seed))
         {
-            _status.Text = "Seed must be a number (e.g. 1234).";
+            _status.Text = Localization.T("Seed must be a number (e.g. 1234).");
             return;
         }
         var mods = new List<string>();
@@ -337,18 +337,18 @@ public partial class ContractSelect : Control
             // shown when it is unreadable. Never launch equipped on a guess.
             if (!_profileReady)
             {
-                _status.Text = "Profile still loading: wait a moment, or dive stock (no modules) meanwhile.";
+                _status.Text = Localization.T("Profile still loading: wait a moment, or dive stock (no modules) meanwhile.");
                 return;
             }
             if (!_profileUsable)
             {
-                _status.Text = "Profile unreadable: stock loadout only (no modules). Nothing was equipped; fix the profile on the main menu.";
+                _status.Text = Localization.T("Profile unreadable: stock loadout only (no modules). Nothing was equipped; fix the profile on the main menu.");
                 return;
             }
         }
         if (!ModuleLoadout.TryValidate(moduleIds, _catalog, _ownedBlueprints, out var modErrors))
         {
-            _status.Text = "Loadout refused: " + string.Join("; ", modErrors);
+            _status.Text = Localization.T("Loadout refused: {0}", (object)string.Join("; ", modErrors));
             return;
         }
         var options = new RunLaunchOptions(
@@ -369,30 +369,30 @@ public partial class ContractSelect : Control
         if (!IsInstanceValid(_status)) return;
         if (!options.TryValidate(_catalog, out var problems))
         {
-            _status.Text = "Invalid selection: " + string.Join("; ", problems);
+            _status.Text = Localization.T("Invalid selection: {0}", (object)string.Join("; ", problems));
             return;
         }
         // Honest pre-flight: generate + validate + dry-run the sim now.
         var request = new RunGenerationRequest(options.RunSeed, options.BiomeId, options.ContractId, _catalog);
         if (!TrenchGenerator.TryGenerate(request, out var world, out var verdict, out var reason) || world is null)
         {
-            _status.Text = "Generation refused: " + reason;
+            _status.Text = Localization.T("Generation refused: {0}", (object)reason);
             return;
         }
         if (!verdict.IsValid)
         {
-            _status.Text = "World invalid: " + string.Join("; ", verdict.Errors);
+            _status.Text = Localization.T("World invalid: {0}", (object)string.Join("; ", verdict.Errors));
             return;
         }
         if (!RunSimulation.TryCreate(world, _catalog, options.DifficultyId, options.FrameId,
                 options.ModifierIds, options.InsuranceId, out _, out var simReason,
                 options.EffectiveModuleIds, options.EffectiveOwnedBlueprints, options.IsTutorial))
         {
-            _status.Text = "Run rejected: " + simReason;
+            _status.Text = Localization.T("Run rejected: {0}", (object)simReason);
             return;
         }
         RunLaunchContext.Pending = options;
-        _status.Text = $"World ready: {world.Nodes.Count} nodes, {world.Segments.Count} legs, route {world.RouteFromExtractionToObjective.Count} waypoints. Diving…";
+        _status.Text = Localization.T("World ready: {0} nodes, {1} legs, route {2} waypoints. Diving…", world.Nodes.Count, world.Segments.Count, world.RouteFromExtractionToObjective.Count);
         Navigate(AppScene.RunLoading);
     }
 
@@ -434,8 +434,8 @@ public partial class ContractSelect : Control
         if (_loadoutDesc is null) return;
         var ids = SelectedModuleIds();
         _loadoutDesc.Text = ids.Count == 0
-            ? "Stock loadout — no modules equipped."
-            : string.Join("\n", ids.Select(id => $"{id}: {ModuleLoadout.Describe(id)}"));
+            ? Localization.T("Stock loadout — no modules equipped.")
+            : string.Join("\n", ids.Select(id => $"{id}: {Localization.T(ModuleLoadout.Describe(id))}"));
     }
 
     /// <summary>Rebuilds each category slot from owned blueprints (supported effects only).</summary>
@@ -448,15 +448,15 @@ public partial class ContractSelect : Control
             if (!_moduleSlots.TryGetValue(category, out var slot)) continue;
             var prior = slot.ItemCount > 0 && slot.Selected >= 0 ? (string)slot.GetItemMetadata(slot.Selected) : "";
             slot.Clear();
-            slot.AddItem("Empty — stock loadout");
+            slot.AddItem(Localization.T("Empty — stock loadout"));
             slot.SetItemMetadata(0, "");
             foreach (var m in _catalog.Modules.Values
                          .Where(m => m.Category == category && ModuleLoadout.IsSupported(m.Id) && owned.Contains(m.Id))
                          .OrderBy(m => m.Id))
             {
-                slot.AddItem($"{ShortModuleName(m.Id)} — {ModuleLoadout.Describe(m.Id)}");
+                slot.AddItem($"{Localization.T(ShortModuleName(m.Id))} — {Localization.T(ModuleLoadout.Describe(m.Id))}");
                 slot.SetItemMetadata(slot.ItemCount - 1, m.Id);
-                slot.SetItemTooltip(slot.ItemCount - 1, ModuleLoadout.Describe(m.Id));
+                slot.SetItemTooltip(slot.ItemCount - 1, Localization.T(ModuleLoadout.Describe(m.Id)));
             }
             slot.Selected = 0;
             for (var i = 0; i < slot.ItemCount; i++)
@@ -491,7 +491,7 @@ public partial class ContractSelect : Control
             _profileReady = true;
             _profileUsable = false;
             if (_status is not null && IsInstanceValid(_status))
-                _status.Text = "Profile storage unavailable: stock loadout only (no modules).";
+                _status.Text = Localization.T("Profile storage unavailable: stock loadout only (no modules).");
             return; // stock loadout; slots already show owned-nothing honestly.
         }
         try
@@ -517,7 +517,7 @@ public partial class ContractSelect : Control
             _profileUsable = false;
             PopulateModuleSlots();
             if (_status is not null && IsInstanceValid(_status))
-                _status.Text = $"Profile unreadable ({ex.GetType().Name}): stock loadout only (no modules).";
+                _status.Text = Localization.T("Profile unreadable ({0}): stock loadout only (no modules).", (object)ex.GetType().Name);
         }
     }
 
@@ -534,7 +534,7 @@ public partial class ContractSelect : Control
         }
         if (!svc.Navigate(target))
         {
-            if (_status is not null) _status.Text = $"Cannot navigate to {target} from here.";
+            if (_status is not null) _status.Text = Localization.T("Cannot navigate to {0} from here.", target);
             GodotLogBridge.Warn(GameServices.Logger, $"ContractSelect navigate to {target} refused.");
         }
     }

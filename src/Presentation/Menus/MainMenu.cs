@@ -91,19 +91,19 @@ public partial class MainMenu : Control
         column.CustomMinimumSize = new Vector2(460, 0);
         center.AddChild(column);
 
-        var kicker = new Label { Text = "DARK INDUSTRIAL SALVAGE // SOLO VERTICAL SLICE", HorizontalAlignment = HorizontalAlignment.Center };
+        var kicker = new Label { Text = Localization.T("DARK INDUSTRIAL SALVAGE // SOLO VERTICAL SLICE"), HorizontalAlignment = HorizontalAlignment.Center };
         kicker.AddThemeFontSizeOverride("font_size", 13);
         kicker.AddThemeColorOverride("font_color", Cyan());
         column.AddChild(kicker);
 
-        var title = new Label { Text = "ABYSS SCAV", HorizontalAlignment = HorizontalAlignment.Center };
+        var title = new Label { Text = Localization.T("ABYSS SCAV"), HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 52);
         title.AddThemeColorOverride("font_color", Parchment());
         column.AddChild(title);
 
         var subtitle = new Label
         {
-            Text = $"Submarine salvage protocol v{GameVersion.Current}",
+            Text = Localization.T("Submarine salvage protocol v{0}", (object)GameVersion.Current),
             HorizontalAlignment = HorizontalAlignment.Center,
         };
         subtitle.AddThemeFontSizeOverride("font_size", 14);
@@ -121,18 +121,18 @@ public partial class MainMenu : Control
         column.AddChild(_statusLabel);
 
         Button? first = null;
-        var dive = AddMenuButton(column, "Solo Dive — Contract & Loadout", true, "Pick waters, contract, and frame, then dive.");
+        var dive = AddMenuButton(column, Localization.T("Solo Dive — Contract & Loadout"), true, Localization.T("Pick waters, contract, and frame, then dive."));
         first = dive;
-        dive.Pressed += () => Navigate(AppScene.Loadout, "Solo dive requires the contract screen.");
+        dive.Pressed += () => Navigate(AppScene.Loadout, Localization.T("Solo dive requires the contract screen."));
         // T0 stays available after completion (replay resumes a complete checklist).
-        _tutorialButton = AddMenuButton(column, "Tutorial: The First Ping", true, "Guided first dive: fixed waters, contract, seed 4242, and skiff.");
+        _tutorialButton = AddMenuButton(column, Localization.T("Tutorial: The First Ping"), true, Localization.T("Guided first dive: fixed waters, contract, seed 4242, and skiff."));
         _tutorialButton.Pressed += LaunchTutorial;
-        var researchButton = AddMenuButton(column, "Research", true, "Spend research data on module blueprints (recorded; no in-run effect yet).");
-        researchButton.Pressed += () => Navigate(AppScene.Research, "Research requires the research screen.");
-        var codexButton = AddMenuButton(column, "Codex", true, "Survey record: creatures, waters, and relic traits found on dives.");
-        codexButton.Pressed += () => Navigate(AppScene.Codex, "Codex requires the codex screen.");
+        var researchButton = AddMenuButton(column, Localization.T("Research"), true, Localization.T("Spend research data on module blueprints (recorded; no in-run effect yet)."));
+        researchButton.Pressed += () => Navigate(AppScene.Research, Localization.T("Research requires the research screen."));
+        var codexButton = AddMenuButton(column, Localization.T("Codex"), true, Localization.T("Survey record: creatures, waters, and relic traits found on dives."));
+        codexButton.Pressed += () => Navigate(AppScene.Codex, Localization.T("Codex requires the codex screen."));
 
-        var settingsButton = AddMenuButton(column, "Settings", true, "Adjust window, graphics and volume.");
+        var settingsButton = AddMenuButton(column, Localization.T("Settings"), true, Localization.T("Adjust window, graphics and volume."));
         settingsButton.Pressed += () =>
         {
             var panel = _settingsPanel;
@@ -143,7 +143,7 @@ public partial class MainMenu : Control
             }
         };
 
-        var logsButton = AddMenuButton(column, "Open Logs Folder", true, "Open the local logs folder.");
+        var logsButton = AddMenuButton(column, Localization.T("Open Logs Folder"), true, Localization.T("Open the local logs folder."));
         logsButton.Pressed += () =>
         {
             if (!GameServices.IsInitialized)
@@ -154,7 +154,7 @@ public partial class MainMenu : Control
             new DesktopPlatformService(GameServices.Paths).OpenLogFolder();
         };
 
-        var quitButton = AddMenuButton(column, "Quit", true, "Exit the game.");
+        var quitButton = AddMenuButton(column, Localization.T("Quit"), true, Localization.T("Exit the game."));
         quitButton.Pressed += () => GetTree()?.Quit();
 
         // Keyboard focus order is linear; first item grabbed.
@@ -188,7 +188,7 @@ public partial class MainMenu : Control
         var box = new VBoxContainer();
         box.AddThemeConstantOverride("separation", 8);
         _savePrompt.AddChild(box);
-        var title = new Label { Text = "SAVE PROFILE NEEDS ATTENTION", HorizontalAlignment = HorizontalAlignment.Center };
+        var title = new Label { Text = Localization.T("SAVE PROFILE NEEDS ATTENTION"), HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 18);
         title.AddThemeColorOverride("font_color", Amber());
         box.AddChild(title);
@@ -198,11 +198,11 @@ public partial class MainMenu : Control
         var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         row.AddThemeConstantOverride("separation", 8);
         box.AddChild(row);
-        var retry = new Button { Text = "Retry load" };
+        var retry = new Button { Text = Localization.T("Retry load") };
         retry.Pressed += () => LoadProfileAsync(explicitRetry: true);
-        var restore = new Button { Text = "Restore backup" };
+        var restore = new Button { Text = Localization.T("Restore backup") };
         restore.Pressed += () => RestoreBackupAsync(true);
-        var play = new Button { Text = "Continue unsaved" };
+        var play = new Button { Text = Localization.T("Continue unsaved") };
         play.Pressed += () =>
         {
             // Explicit player choice: session-only opt-out, registered in the
@@ -218,7 +218,7 @@ public partial class MainMenu : Control
             if (_savePrompt is PanelContainer pc) pc.Visible = false;
             RefreshProfileLabel();
             if (_statusLabel is not null && IsInstanceValid(_statusLabel))
-                _statusLabel.Text += "\nRunning unsaved by choice: settlement credits, research, and tutorial progress will not persist.";
+                _statusLabel.Text += "\n" + Localization.T("Running unsaved by choice: settlement credits, research, and tutorial progress will not persist.");
         };
         row.AddChild(retry);
         row.AddChild(restore);
@@ -252,7 +252,7 @@ public partial class MainMenu : Control
         {
             if (!svc.Navigate(target) && _statusLabel is not null)
             {
-                _statusLabel.Text = failNote + " Flow refused the transition; staying on menu.";
+                _statusLabel.Text = failNote + " " + Localization.T("Flow refused the transition; staying on menu.");
             }
             return;
         }
@@ -290,17 +290,17 @@ public partial class MainMenu : Control
         }
         if (!ContentCatalog.TryBuild(out var catalog, out var errors) || catalog is null)
         {
-            if (_statusLabel is not null) _statusLabel.Text = "Tutorial unavailable: content catalog failed: " + string.Join("; ", errors);
+            if (_statusLabel is not null) _statusLabel.Text = Localization.T("Tutorial unavailable: content catalog failed: {0}", (object)string.Join("; ", errors));
             return;
         }
         var options = RunLaunchOptions.Tutorial();
         if (!options.TryValidate(catalog, out var problems))
         {
-            if (_statusLabel is not null) _statusLabel.Text = "Tutorial unavailable: " + string.Join("; ", problems);
+            if (_statusLabel is not null) _statusLabel.Text = Localization.T("Tutorial unavailable: {0}", (object)string.Join("; ", problems));
             return;
         }
         RunLaunchContext.Pending = options;
-        Navigate(AppScene.Loadout, "Tutorial launch requires the contract screen.");
+        Navigate(AppScene.Loadout, Localization.T("Tutorial launch requires the contract screen."));
     }
 
     private void RefreshStatus()
@@ -309,19 +309,19 @@ public partial class MainMenu : Control
         if (status is null) return;
         if (!GameServices.IsInitialized)
         {
-            status.Text = "Boot services unavailable. Restart the game.";
+            status.Text = Localization.T("Boot services unavailable. Restart the game.");
             return;
         }
         var holder = GameServices.Registry.Resolve<AppSettingsHolder>();
         var sessionLock = GameServices.SessionLock;
         var parts = new List<string>();
-        if (holder.IsSafeMode) parts.Add("SAFE MODE: 1280x720 windowed / Low (preferences untouched).");
-        if (sessionLock.PreviousCrashDetected) parts.Add("Previous session did not exit cleanly. Safe mode is recommended.");
-        if (holder.IsFutureVersionReadOnly) parts.Add("Settings are from a newer version: running on defaults without overwriting your file.");
+        if (holder.IsSafeMode) parts.Add(Localization.T("SAFE MODE: 1280x720 windowed / Low (preferences untouched)."));
+        if (sessionLock.PreviousCrashDetected) parts.Add(Localization.T("Previous session did not exit cleanly. Safe mode is recommended."));
+        if (holder.IsFutureVersionReadOnly) parts.Add(Localization.T("Settings are from a newer version: running on defaults without overwriting your file."));
         if (parts.Count == 0)
         {
             var s = holder.Current;
-            parts.Add($"Ready — {s.Graphics.Width}x{s.Graphics.Height} {s.Graphics.WindowMode} / {s.Graphics.Quality}.");
+            parts.Add(Localization.T("Ready — {0}x{1} {2} / {3}.", s.Graphics.Width, s.Graphics.Height, Localization.T(s.Graphics.WindowMode), Localization.T(s.Graphics.Quality)));
         }
         status.Text = string.Join("\n", parts);
         GodotLogBridge.Info(GameServices.Logger, "Main menu shown. " + string.Join(" ", parts));
@@ -333,14 +333,14 @@ public partial class MainMenu : Control
         if (_profileLabel is null || !IsInstanceValid(_profileLabel)) return;
         var p = _profile;
         var suffix = GameServices.WritesSuspendedByChoice
-            ? " (unsaved — not saved by choice)"
-            : _saveUsable ? "" : " (unsaved session)";
-        _profileLabel.Text = $"Settlement ledger — {p.Currencies.Credits} cr · {p.Currencies.ResearchData} research · {p.Currencies.AbyssShards} shards · {p.Stats.RunsCompleted}W/{p.Stats.RunsFailed}L{suffix}";
+            ? Localization.T(" (unsaved — not saved by choice)")
+            : _saveUsable ? "" : Localization.T(" (unsaved session)");
+        _profileLabel.Text = Localization.T("Settlement ledger — {0} cr · {1} research · {2} shards · {3}W/{4}L{5}", p.Currencies.Credits, p.Currencies.ResearchData, p.Currencies.AbyssShards, p.Stats.RunsCompleted, p.Stats.RunsFailed, suffix);
         if (_tutorialButton is not null)
         {
             _tutorialButton.Text = p.Tutorial.Completed
-                ? "Tutorial: The First Ping (completed — replay)"
-                : "Tutorial: The First Ping";
+                ? Localization.T("Tutorial: The First Ping (completed — replay)")
+                : Localization.T("Tutorial: The First Ping");
         }
     }
 
@@ -365,7 +365,7 @@ public partial class MainMenu : Control
                 RefreshProfileLabel();
                 return;
             }
-            ShowSavePrompt("Save folder is unavailable: " + ex.Message);
+            ShowSavePrompt(Localization.T("Save folder is unavailable: {0}", (object)ex.Message));
             return;
         }
         try
@@ -391,7 +391,7 @@ public partial class MainMenu : Control
                 RefreshProfileLabel();
                 return;
             }
-            ShowSavePrompt($"Profile is from a newer version (schema v{ex.FoundVersion}). The game runs read-only on defaults so nothing is overwritten. Install the newer build to use it.");
+            ShowSavePrompt(Localization.T("Profile is from a newer version (schema v{0}). The game runs read-only on defaults so nothing is overwritten. Install the newer build to use it.", ex.FoundVersion));
             RefreshProfileLabel();
         }
         catch (SaveCorruptException ex)
@@ -402,7 +402,7 @@ public partial class MainMenu : Control
                 RefreshProfileLabel();
                 return;
             }
-            ShowSavePrompt("Profile failed to load and was left untouched: " + ex.Message + "\nRetry, restore the newest backup, or continue without saving (explicit choice, never a silent reset).");
+            ShowSavePrompt(Localization.T("Profile failed to load and was left untouched: {0}\nRetry, restore the newest backup, or continue without saving (explicit choice, never a silent reset).", (object)ex.Message));
         }
         catch (SaveException ex)
         {
@@ -412,7 +412,7 @@ public partial class MainMenu : Control
                 RefreshProfileLabel();
                 return;
             }
-            ShowSavePrompt($"Profile load failed [{ex.Code}] and was left untouched: {ex.Message}");
+            ShowSavePrompt(Localization.T("Profile load failed [{0}] and was left untouched: {1}", (object)ex.Code, ex.Message));
         }
         catch (Exception ex)
         {
@@ -422,7 +422,7 @@ public partial class MainMenu : Control
                 RefreshProfileLabel();
                 return;
             }
-            ShowSavePrompt("Profile load failed unexpectedly and was left untouched: " + ex.GetType().Name);
+            ShowSavePrompt(Localization.T("Profile load failed unexpectedly and was left untouched: {0}", (object)ex.GetType().Name));
         }
     }
 
@@ -441,7 +441,7 @@ public partial class MainMenu : Control
                 if (explicitRestore) ClearOptOut();
                 if (_savePrompt is PanelContainer pc && IsInstanceValid(pc)) pc.Visible = false;
                 RefreshProfileLabel();
-                if (_statusLabel is not null && IsInstanceValid(_statusLabel)) _statusLabel.Text += $"\nRestored backup generation {gen}. Previous primary quarantined.";
+                if (_statusLabel is not null && IsInstanceValid(_statusLabel)) _statusLabel.Text += "\n" + Localization.T("Restored backup generation {0}. Previous primary quarantined.", gen);
                 GodotLogBridge.Info(GameServices.Logger, $"Profile restored from backup {gen}.");
                 return;
             }
@@ -455,7 +455,7 @@ public partial class MainMenu : Control
             }
         }
         if (ct.IsCancellationRequested || !IsInstanceValid(this)) return;
-        ShowSavePrompt("No usable backup generation (1..3) was found. Retry, or continue without saving.");
+        ShowSavePrompt(Localization.T("No usable backup generation (1..3) was found. Retry, or continue without saving."));
     }
 
     /// <summary>Only an explicit successful Retry/Restore clears the opt-out.</summary>

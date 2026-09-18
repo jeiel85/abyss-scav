@@ -1,4 +1,5 @@
 using AbyssScav.Domain;
+using AbyssScav.Foundation;
 using Godot;
 
 namespace AbyssScav.Presentation;
@@ -136,7 +137,7 @@ public partial class RunHud : Control
 
         _hint = new Label
         {
-            Text = "W/S surge · A/D sway · Space/Ctrl heave · Arrows yaw/pitch · Shift boost · Z quiet · F ping · E salvage · V survey · G service · R repair · J dock/undock · H drill hold · X winch · T extract · Esc pause",
+            Text = Localization.T("W/S surge · A/D sway · Space/Ctrl heave · Arrows yaw/pitch · Shift boost · Z quiet · F ping · E salvage · V survey · G service · R repair · J dock/undock · H drill hold · X winch · T extract · Esc pause"),
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         };
         _hint.AddThemeFontSizeOverride("font_size", 12);
@@ -151,7 +152,7 @@ public partial class RunHud : Control
         // Buddy line bottom-right: last callout, steady (no flashing, no timer).
         _buddy = new Label
         {
-            Text = "BUDDY LINKED — callouts on",
+            Text = Localization.T("BUDDY LINKED — callouts on"),
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         };
         _buddy.AddThemeFontSizeOverride("font_size", 13);
@@ -177,18 +178,18 @@ public partial class RunHud : Control
         var box = new VBoxContainer();
         box.AddThemeConstantOverride("separation", 8);
         _pauseOverlay.AddChild(box);
-        var title = new Label { Text = "PAUSED — DIVE HELD", HorizontalAlignment = HorizontalAlignment.Center };
+        var title = new Label { Text = Localization.T("PAUSED — DIVE HELD"), HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 20);
         title.AddThemeColorOverride("font_color", new Color("#dae4df"));
         box.AddChild(title);
-        var resume = new Button { Text = "Resume dive (Esc)" };
+        var resume = new Button { Text = Localization.T("Resume dive (Esc)") };
         resume.Pressed += () => ResumeRequested?.Invoke();
-        var abort = new Button { Text = "Abort to menu" };
+        var abort = new Button { Text = Localization.T("Abort to menu") };
         abort.Pressed += () => AbortRequested?.Invoke();
         box.AddChild(resume);
         box.AddChild(abort);
-        _buddyToggle = new CheckButton { Text = "Sonar buddy callouts", ButtonPressed = true };
-        _buddyToggle.TooltipText = "Solo-only callout system: range, contact, and threshold warnings. No auto-steering. Default on.";
+        _buddyToggle = new CheckButton { Text = Localization.T("Sonar buddy callouts"), ButtonPressed = true };
+        _buddyToggle.TooltipText = Localization.T("Solo-only callout system: range, contact, and threshold warnings. No auto-steering. Default on.");
         _buddyToggle.Toggled += on =>
         {
             BuddyEnabled = on;
@@ -218,10 +219,10 @@ public partial class RunHud : Control
         _endBody.AddThemeFontSizeOverride("font_size", 14);
         _endBody.AddThemeColorOverride("font_color", new Color("#dae4df"));
         box.AddChild(_endBody);
-        _retryButton = new Button { Text = "Retry save (no double reward)", Visible = false };
+        _retryButton = new Button { Text = Localization.T("Retry save (no double reward)"), Visible = false };
         _retryButton.Pressed += () => RetrySaveRequested?.Invoke();
         box.AddChild(_retryButton);
-        _endMenuButton = new Button { Text = "Return to menu" };
+        _endMenuButton = new Button { Text = Localization.T("Return to menu") };
         _endMenuButton.Pressed += () => AbortRequested?.Invoke();
         box.AddChild(_endMenuButton);
     }
@@ -240,7 +241,7 @@ public partial class RunHud : Control
         if (_endMenuButton is not null)
         {
             _endMenuButton.Disabled = !menuEnabled;
-            _endMenuButton.TooltipText = menuEnabled ? "Return to menu." : "Settlement write in flight — exit held until it completes.";
+            _endMenuButton.TooltipText = menuEnabled ? Localization.T("Return to menu.") : Localization.T("Settlement write in flight — exit held until it completes.");
         }
     }
 
