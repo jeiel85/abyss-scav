@@ -1,0 +1,120 @@
+name: validate-and-build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  validate:
+    name: Validate and Test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Restore dependencies
+        run: dotnet restore AbyssScav.sln
+
+      - name: Build solution
+        run: dotnet build AbyssScav.sln --configuration Release --no-restore
+
+      - name: Run Domain Test Suite
+        run: dotnet run --project tests/Domain/AbyssScav.Domain.Tests.csproj -c Release --no-build
+
+      - name: Run Foundation Test Suite
+        run: dotnet run --project tests/Foundation/AbyssScav.Foundation.Tests.csproj -c Release --no-build
+
+      - name: Run Net Test Suite
+        run: dotnet run --project tests/Net/AbyssScav.Net.Tests.csproj -c Release --no-build
+
+      - name: Run Persistence Test Suite
+        run: dotnet run --project tests/Persistence/AbyssScav.Persistence.Tests.csproj -c Release --no-build
+
+      - name: Validate Design Package
+        run: python tools/validate_design_package.py
+
+  release:
+    name: Build and Package Windows Release
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build solution
+        run: dotnet build AbyssScav.sln --configuration Release
+
+      - name: Download Godot Mono & Export Templates
+        shell: pwsh
+        run: |
+          $godotVersion = "4.7.2-stable"
+          $godotDir = "$env:RUNNER_TEMP\godot"
+          New-Item -ItemType Directory -Force -Path $godotDir | Out-Null
+          
+          Write-Host "Downloading Godot Mono..."
+          Invoke-WebRequest -Uri "https://github.com/godotengine/godot/releases/download/$godotVersion/Godot_v${godotVersion}_mono_win64.zip" -OutFile "$godotDir\godot.zip"
+          Expand-Archive -Path "$godotDir\godot.zip" -DestinationPath $godotDir
+          
+          Write-Host "Downloading Godot Mono Export Templates..."
+          $templatesDir = "$env:APPDATA\Godot\export_templates\4.7.2.stable.mono"
+          New-Item -ItemType Directory -Force -Path $templatesDir | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/godotengine/godot/releases/download/$godotVersion/Godot_v${godotVersion}_mono_export_templates.tpz" -OutFile "$godotDir\templates.zip"
+          Expand-Archive -Path "$godotDir\templates.zip" -DestinationPath "$godotDir\templates_extracted"
+          Copy-Item "$godotDir\templates_extracted\templates\*" $templatesDir -Recurse -Force
+          
+          echo "GODOT_BIN=$godotDir\Godot_v${godotVersion}_mono_win64\Godot_v${godotVersion}_mono_win64_console.exe" >> $env:GITHUB_ENV
+
+      - name: Export Windows Desktop Release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build\windows | Out-Null
+          & $env:GODOT_BIN --headless --export-release "Windows Desktop" build\windows\AbyssScav.exe
+
+      - name: Package Release ZIP and SHA256 Manifest
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          python tools/package_windows.py $tag
+
+      - name: Create GitHub Release Draft
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: false
+          body_path: .github/RELEASE_TEMPLATE.md
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt

@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible AbyssScav issue
+title: "[Bug] "
+body:
+  - type: input
+    attributes:
+      label: Game version
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Session type
+      options: [Solo, LAN, Direct IP]
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected result
+  - type: textarea
+    attributes:
+      label: Actual result
+  - type: textarea
+    attributes:
+      label: Support bundle information
+      description: Attach only if you reviewed the bundle contents.

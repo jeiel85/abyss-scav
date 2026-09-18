@@ -1,0 +1,5 @@
+Copyright (c) 2026 AbyssScav Project Contributors. All rights reserved.
+
+Source code and assets in this repository are published for playtesting, code review, and non-commercial community evaluation.
+
+Redistribution, commercial exploitation, or re-licensing of this source code or binary distributions without explicit written permission from the copyright holders is strictly prohibited.
