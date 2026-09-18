@@ -8,6 +8,7 @@ var suites = new (string Suite, Func<int> Run)[]
     ("Logging", LoggingTests.Run),
     ("AudioPolicy", AudioPolicyTests.Run),
     ("RegistryFlow", RegistryFlowTests.Run),
+    ("SupportBundle", SupportBundleTests.Run),
 };
 
 var totalFail = 0;

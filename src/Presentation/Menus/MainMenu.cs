@@ -154,6 +154,28 @@ public partial class MainMenu : Control
             new DesktopPlatformService(GameServices.Paths).OpenLogFolder();
         };
 
+        var bundleButton = AddMenuButton(column, Localization.T("Create Support Bundle"), true, Localization.T("Package logs and settings into a support bundle for bug reports."));
+        bundleButton.Pressed += () =>
+        {
+            if (!GameServices.IsInitialized)
+            {
+                GD.PushError("[BOOT-003] Services not initialized.");
+                return;
+            }
+            try
+            {
+                var sessionId = GameServices.SessionLock.SessionId;
+                var osInfo = new DesktopPlatformService(GameServices.Paths).DescribeOs();
+                var bundlePath = SupportBundleWriter.Create(GameServices.Paths, GameVersion.Current, sessionId, osInfo);
+                if (_statusLabel is not null) _statusLabel.Text = Localization.T("Support bundle written to {0}.", (object)bundlePath);
+            }
+            catch (Exception ex)
+            {
+                GD.PushError(ex.Message);
+                if (_statusLabel is not null) _statusLabel.Text = Localization.T("Support bundle failed: {0}", (object)ex.Message);
+            }
+        };
+
         var quitButton = AddMenuButton(column, Localization.T("Quit"), true, Localization.T("Exit the game."));
         quitButton.Pressed += () => GetTree()?.Quit();
 
