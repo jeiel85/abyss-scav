@@ -99,7 +99,7 @@ internal static class SafetyTests
                 DomainSetup.Teleport(sim, contact.ApproxPosition);
                 var survey = sim.TrySurvey(contact.ContactId);
                 if (survey.Success) successes++;
-                else if (survey.Reason.Contains("ghost", StringComparison.OrdinalIgnoreCase)) ghostFades++;
+                else if (survey.Args.Any(a => a is string s && s.Contains("ghost", StringComparison.OrdinalIgnoreCase))) ghostFades++;
                 else throw new Exception($"Unexplained survey failure: {survey.Reason}");
             }
             TestAssert.True(ghostFades >= 1, "at least one ghost faded explicitly");

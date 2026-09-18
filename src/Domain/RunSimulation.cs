@@ -70,7 +70,7 @@ public enum CreatureState
 }
 
 /// <summary>Host event. Subscribe via <see cref="RunSimulation.EventRaised"/>; recent history is also kept in <see cref="RunSimulation.RecentEvents"/>.</summary>
-public sealed record RunEvent(float TimeSeconds, string Kind, string Message);
+public sealed record RunEvent(float TimeSeconds, string Kind, string Message, params object[] Args);
 
 /// <summary>One flood zone (docs/03 §1: exactly 4 compartments).</summary>
 public sealed record FloodZoneState(string ZoneId, int Severity, float FloodPercent);
@@ -97,37 +97,37 @@ public sealed record ContractProgressSnapshot(
     float ObserveSeconds);
 
 /// <summary>Result of <see cref="RunSimulation.Pulse"/>.</summary>
-public sealed record PulseResult(bool Success, string Reason, IReadOnlyList<ContactSnapshot> Contacts, float ThreatAdded, float CooldownSeconds);
+public sealed record PulseResult(bool Success, string Reason, IReadOnlyList<ContactSnapshot> Contacts, float ThreatAdded, float CooldownSeconds, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TrySalvage"/>.</summary>
-public sealed record SalvageResult(bool Success, string Reason, int ValueBanked, string QuestItemId);
+public sealed record SalvageResult(bool Success, string Reason, int ValueBanked, string QuestItemId, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TrySurvey"/>.</summary>
-public sealed record SurveyResult(bool Success, string Reason);
+public sealed record SurveyResult(bool Success, string Reason, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TryRepairHull"/>.</summary>
-public sealed record RepairResult(bool Success, string Reason, int SealantRemaining);
+public sealed record RepairResult(bool Success, string Reason, int SealantRemaining, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TryServiceContractNode"/>.</summary>
-public sealed record ServiceResult(bool Success, string Reason, int SealantRemaining);
+public sealed record ServiceResult(bool Success, string Reason, int SealantRemaining, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TryUseWinch"/>.</summary>
-public sealed record WinchResult(bool Success, string Reason, Vector3 ReturnPosition);
+public sealed record WinchResult(bool Success, string Reason, Vector3 ReturnPosition, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TryDock"/>.</summary>
-public sealed record DockResult(bool Success, string Reason, string? StationId);
+public sealed record DockResult(bool Success, string Reason, string? StationId, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TryUndock"/>.</summary>
-public sealed record UndockResult(bool Success, string Reason);
+public sealed record UndockResult(bool Success, string Reason, params object[] Args);
 
 /// <summary>Result of drill start/cancel calls.</summary>
-public sealed record DrillResult(bool Success, string Reason);
+public sealed record DrillResult(bool Success, string Reason, params object[] Args);
 
 /// <summary>Result of the tutorial-only training breach injection.</summary>
-public sealed record TrainingBreachResult(bool Success, string Reason, int ZoneIndex);
+public sealed record TrainingBreachResult(bool Success, string Reason, int ZoneIndex, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TryExtract"/>.</summary>
-public sealed record ExtractResult(bool Success, string Reason, RunSettlementDraft? Settlement);
+public sealed record ExtractResult(bool Success, string Reason, RunSettlementDraft? Settlement, params object[] Args);
 
 /// <summary>
 /// Settlement draft produced by the host. It is a plain, signed-free data bag the
@@ -338,7 +338,7 @@ public sealed class RunSimulation
         LastSafePosition = ShipPosition;
         HasSafePosition = true;
 
-        Raise("run.start", $"Run {_world.RunSeed} started in {_biome.DisplayName} on {_contract.Archetype}.");
+        Raise("run.start", "Run {0} started in {1} on {2}.", _world.RunSeed, _biome.DisplayName, _contract.Archetype);
     }
 
     // ------------------------------------------------------------ construction
@@ -708,7 +708,7 @@ public sealed class RunSimulation
         if (shed != PowerShedLevel)
         {
             PowerShedLevel = shed;
-            Raise("power.shed", shed == 0 ? "Power load nominal." : $"Power deficit {deficit:F0} PU: shed level {shed}.");
+            Raise("power.shed", shed == 0 ? "Power load nominal." : "Power deficit {0:F0} PU: shed level {1}.", deficit, shed);
         }
         var brownout = deficit > 20f;
         if (brownout && !BrownoutActive) Raise("power.brownout", "Brownout: active sonar offline until load drops.");
@@ -759,7 +759,7 @@ public sealed class RunSimulation
                 if (_creakTimer > 9f)
                 {
                     _creakTimer = 0f;
-                    Raise("hull.creak", $"Hull creak at {DepthMeters:F0} m (margin {PressureMargin:F1}).");
+                    Raise("hull.creak", "Hull creak at {0:F0} m (margin {1:F1}).", DepthMeters, PressureMargin);
                 }
                 var p = 0.05 * ((-PressureMargin) / 10.0 + 0.2) * _difficulty.BreachProbabilityMultiplier;
                 if (_modifierIds.Contains("modifier.fragile_hull")) p *= 1.3;
@@ -793,7 +793,7 @@ public sealed class RunSimulation
                 var before = (int)Math.Floor(_observeSeconds);
                 _observeSeconds += dt;
                 if ((int)Math.Floor(_observeSeconds) != before)
-                    Raise("contract.observe", $"Apex observation {_observeSeconds:F0} s.");
+                    Raise("contract.observe", "Apex observation {0:F0} s.", _observeSeconds);
                 if (before < RequiredObserve() && _observeSeconds >= RequiredObserve())
                     Raise("contract.objective", "Apex observation complete. Extract.");
             }
@@ -818,13 +818,13 @@ public sealed class RunSimulation
     public PulseResult Pulse()
     {
         if (Phase != RunPhase.Active)
-            return new PulseResult(false, "Run is not active.", Array.Empty<ContactSnapshot>(), 0f, PulseCooldownRemaining);
+            return new PulseResult(false, "Run is not active.", Array.Empty<ContactSnapshot>(), 0f, PulseCooldownRemaining, Array.Empty<object>());
         if (_silentRunning)
-            return new PulseResult(false, "Silent running: active sonar disabled.", Array.Empty<ContactSnapshot>(), 0f, PulseCooldownRemaining);
+            return new PulseResult(false, "Silent running: active sonar disabled.", Array.Empty<ContactSnapshot>(), 0f, PulseCooldownRemaining, Array.Empty<object>());
         if (PulseCooldownRemaining > 0f)
-            return new PulseResult(false, $"Pulse cooling down ({PulseCooldownRemaining:F1} s).", Array.Empty<ContactSnapshot>(), 0f, PulseCooldownRemaining);
+            return new PulseResult(false, "Pulse cooling down ({0:F1} s).", Array.Empty<ContactSnapshot>(), 0f, PulseCooldownRemaining, PulseCooldownRemaining);
         if (BrownoutActive || PowerShedLevel >= 2)
-            return new PulseResult(false, "Pulse offline: shed level 2 brownout.", Array.Empty<ContactSnapshot>(), 0f, PulseCooldownRemaining);
+            return new PulseResult(false, "Pulse offline: shed level 2 brownout.", Array.Empty<ContactSnapshot>(), 0f, PulseCooldownRemaining, Array.Empty<object>());
 
         var range = _biome.PulseRangeMeters * _loadout.PulseRangeMult;
         if (_modifierIds.Contains("modifier.sonar_blackout")) range *= 0.7f;
@@ -922,9 +922,9 @@ public sealed class RunSimulation
         if (PowerShedLevel == 1) cooldown *= 1.5f;
         PulseCooldownRemaining = cooldown;
 
-        Raise("sonar.pulse", $"Active pulse: {fresh.Count} contacts in range.");
+        Raise("sonar.pulse", "Active pulse: {0} contacts in range.", fresh.Count);
         return new PulseResult(true, string.Empty,
-            fresh.Select(id => ToSnapshot(_contacts[id])).ToList(), added, PulseCooldownRemaining);
+            fresh.Select(id => ToSnapshot(_contacts[id])).ToList(), added, PulseCooldownRemaining, Array.Empty<object>());
     }
 
     /// <summary>
@@ -936,27 +936,27 @@ public sealed class RunSimulation
     public SalvageResult TrySalvage(string lootSpawnId)
     {
         if (Phase != RunPhase.Active)
-            return new SalvageResult(false, "Run is not active.", 0, string.Empty);
+            return new SalvageResult(false, "Run is not active.", 0, string.Empty, Array.Empty<object>());
         var loot = _world.LootSpawns.FirstOrDefault(l => l.SpawnId == lootSpawnId);
         if (loot is null)
-            return new SalvageResult(false, $"Unknown loot '{lootSpawnId}'.", 0, string.Empty);
+            return new SalvageResult(false, "Unknown loot '{0}'.", 0, string.Empty, lootSpawnId);
         if (_collectedLoot.Contains(lootSpawnId))
-            return new SalvageResult(false, "Already secured: duplicate salvage rejected.", 0, loot.QuestItemId);
+            return new SalvageResult(false, "Already secured: duplicate salvage rejected.", 0, loot.QuestItemId, Array.Empty<object>());
         if (!string.IsNullOrEmpty(loot.QuestItemId) && _questRecovered.Contains(loot.QuestItemId))
-            return new SalvageResult(false, "Quest item already secured: duplicate rejected.", 0, loot.QuestItemId);
+            return new SalvageResult(false, "Quest item already secured: duplicate rejected.", 0, loot.QuestItemId, Array.Empty<object>());
         if (loot.Kind == LootKind.Core)
-            return new SalvageResult(false, "Facility core requires docked drill extraction: dock (J) at the facility, then hold drill (H) for 8 s. Direct manipulator recovery is refused.", 0, loot.QuestItemId);
+            return new SalvageResult(false, "Facility core requires docked drill extraction: dock (J) at the facility, then hold drill (H) for 8 s. Direct manipulator recovery is refused.", 0, loot.QuestItemId, Array.Empty<object>());
         var dist = Vector3.Distance(loot.Position, ShipPosition);
         if (dist > SalvageRangeMeters)
-            return new SalvageResult(false, $"Out of manipulator range ({dist:F0} m, need {SalvageRangeMeters:F0} m).", 0, loot.QuestItemId);
+            return new SalvageResult(false, "Out of manipulator range ({0:F0} m, need {1:F0} m).", 0, loot.QuestItemId, dist, SalvageRangeMeters);
         if (_cargo.Count >= _frame.CargoSlots)
-            return new SalvageResult(false, "Cargo hold full: no free slot.", 0, loot.QuestItemId);
+            return new SalvageResult(false, "Cargo hold full: no free slot.", 0, loot.QuestItemId, Array.Empty<object>());
         if (CargoUsedMassKg + loot.MassKg > _frame.CargoMaxMassKg)
-            return new SalvageResult(false, $"Too heavy: needs {loot.MassKg:F0} kg free.", 0, loot.QuestItemId);
+            return new SalvageResult(false, "Too heavy: needs {0:F0} kg free.", 0, loot.QuestItemId, loot.MassKg);
 
         var value = Math.Max(0, (int)Math.Round(loot.ValueCredits * _difficulty.ResourceMultiplier));
         BankLoot(loot, value);
-        return new SalvageResult(true, string.Empty, value, loot.QuestItemId);
+        return new SalvageResult(true, string.Empty, value, loot.QuestItemId, Array.Empty<object>());
     }
 
     private void BankLoot(LootSpawn loot, int value)
@@ -975,7 +975,7 @@ public sealed class RunSimulation
 
         Threat = Math.Min(100f, Threat + TraitThreat(loot.TraitId));
 
-        Raise("salvage.secured", $"Secured {loot.Kind} (+{value} cr).");
+        Raise("salvage.secured", "Secured {0} (+{1} cr).", loot.Kind, value);
         CheckObjective("Salvage banked.");
     }
 
@@ -988,32 +988,32 @@ public sealed class RunSimulation
     public SurveyResult TrySurvey(string contactId)
     {
         if (Phase != RunPhase.Active)
-            return new SurveyResult(false, "Run is not active.");
+            return new SurveyResult(false, "Run is not active.", Array.Empty<object>());
         if (!_contacts.TryGetValue(contactId, out var c))
-            return new SurveyResult(false, $"Unknown contact '{contactId}'. Ping first.");
+            return new SurveyResult(false, "Unknown contact '{0}'. Ping first.", contactId);
         if (ElapsedSeconds - c.LastSeenSeconds > 60f)
-            return new SurveyResult(false, "Contact expired: ping again.");
+            return new SurveyResult(false, "Contact expired: ping again.", Array.Empty<object>());
         if (c.Surveyed)
-            return new SurveyResult(false, "Already surveyed: duplicate rejected.");
+            return new SurveyResult(false, "Already surveyed: duplicate rejected.", Array.Empty<object>());
         if (c.IsGhost)
         {
             c.Surveyed = true;
-            return new SurveyResult(false, "Contact faded on approach: likely sonar ghost.");
+            return new SurveyResult(false, "Contact faded on approach: likely sonar ghost.", "ghost");
         }
         if (c.Confidence < 0.3f)
-            return new SurveyResult(false, "Confidence too low: ping again.");
+            return new SurveyResult(false, "Confidence too low: ping again.", Array.Empty<object>());
         var range = DomainConstants.SurveyRangeMeters;
         if (_modifierIds.Contains("modifier.low_visibility")) range *= 0.85f;
         var dist = Vector3.Distance(c.TruePosition, ShipPosition);
         if (dist > range)
-            return new SurveyResult(false, $"Out of survey range ({dist:F0} m, need {range:F0} m).");
+            return new SurveyResult(false, "Out of survey range ({0:F0} m, need {1:F0} m).", dist, range);
 
         c.Surveyed = true;
         SurveysDone++;
         _surveyProgress++;
-        Raise("contact.surveyed", $"Surveyed {c.Class} contact ({SurveysDone} total).");
+        Raise("contact.surveyed", "Surveyed {0} contact ({1} total).", c.Class, SurveysDone);
         CheckObjective("Survey logged.");
-        return new SurveyResult(true, string.Empty);
+        return new SurveyResult(true, string.Empty, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1026,14 +1026,14 @@ public sealed class RunSimulation
     public RepairResult TryRepairHull(int zoneIndex)
     {
         if (Phase != RunPhase.Active)
-            return new RepairResult(false, "Run is not active.", Sealant);
+            return new RepairResult(false, "Run is not active.", Sealant, Array.Empty<object>());
         if (zoneIndex < 0 || zoneIndex >= 4)
-            return new RepairResult(false, "Zone index out of range (0..3).", Sealant);
+            return new RepairResult(false, "Zone index out of range (0..3).", Sealant, Array.Empty<object>());
         if (_severity[zoneIndex] <= 0)
-            return new RepairResult(false, "No breach in that compartment.", Sealant);
+            return new RepairResult(false, "No breach in that compartment.", Sealant, Array.Empty<object>());
         var cost = _flood[zoneIndex] >= 100f ? 2 : 1;
         if (Sealant < cost)
-            return new RepairResult(false, $"Needs {cost} sealant, have {Sealant}.", Sealant);
+            return new RepairResult(false, "Needs {0} sealant, have {1}.", Sealant, cost, Sealant);
 
         Sealant -= cost;
         SealantUsed += cost;
@@ -1042,8 +1042,8 @@ public sealed class RunSimulation
         RepairsDone++;
         _noiseSpike += 10f;
         Threat = Math.Min(100f, Threat + 2f);
-        Raise("repair.done", $"Welded {ZoneIds[zoneIndex]}: severity {_severity[zoneIndex]}, sealant {Sealant}.");
-        return new RepairResult(true, string.Empty, Sealant);
+        Raise("repair.done", "Welded {0}: severity {1}, sealant {2}.", ZoneIds[zoneIndex], _severity[zoneIndex], Sealant);
+        return new RepairResult(true, string.Empty, Sealant, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1057,25 +1057,25 @@ public sealed class RunSimulation
     public ServiceResult TryServiceContractNode(string nodeId)
     {
         if (Phase != RunPhase.Active)
-            return new ServiceResult(false, "Run is not active.", Sealant);
+            return new ServiceResult(false, "Run is not active.", Sealant, Array.Empty<object>());
         var node = _world.Nodes.FirstOrDefault(n => n.Id == nodeId);
         if (node is null)
-            return new ServiceResult(false, $"Unknown node '{nodeId}'.", Sealant);
+            return new ServiceResult(false, "Unknown node '{0}'.", Sealant, nodeId);
         if (string.IsNullOrEmpty(node.ServiceId))
-            return new ServiceResult(false, "Node has no contract service target.", Sealant);
+            return new ServiceResult(false, "Node has no contract service target.", Sealant, Array.Empty<object>());
         if (_servicedNodes.Contains(node.ServiceId))
-            return new ServiceResult(false, "Service target already completed: duplicate rejected.", Sealant);
+            return new ServiceResult(false, "Service target already completed: duplicate rejected.", Sealant, Array.Empty<object>());
         if (!IsServiceRequired(node.ServiceId))
-            return new ServiceResult(false, $"Service target '{node.ServiceId}' is not part of this contract.", Sealant);
+            return new ServiceResult(false, "Service target '{0}' is not part of this contract.", Sealant, node.ServiceId);
         var dist = Vector3.Distance(node.Position, ShipPosition);
         if (dist > DomainConstants.ServiceRangeMeters)
-            return new ServiceResult(false, $"Out of service range ({dist:F0} m, need {DomainConstants.ServiceRangeMeters:F0} m).", Sealant);
+            return new ServiceResult(false, "Out of service range ({0:F0} m, need {1:F0} m).", Sealant, dist, DomainConstants.ServiceRangeMeters);
         if (node.ServiceId == QuestItems.CoreService && _dockedNodeId != node.Id)
-            return new ServiceResult(false, "Core stabilization requires docking (J) at the facility first.", Sealant);
+            return new ServiceResult(false, "Core stabilization requires docking (J) at the facility first.", Sealant, Array.Empty<object>());
 
         var cost = node.ServiceId == QuestItems.CoreService ? 2 : 1;
         if (Sealant < cost)
-            return new ServiceResult(false, $"Needs {cost} sealant, have {Sealant}.", Sealant);
+            return new ServiceResult(false, "Needs {0} sealant, have {1}.", Sealant, cost, Sealant);
 
         Sealant -= cost;
         SealantUsed += cost;
@@ -1083,9 +1083,9 @@ public sealed class RunSimulation
         _weldTimer = 5f;
         _noiseSpike += 12f;
         Threat = Math.Min(100f, Threat + 4f);
-        Raise("service.done", $"Serviced {node.ServiceId} at {nodeId}.");
+        Raise("service.done", "Serviced {0} at {1}.", node.ServiceId, nodeId);
         CheckObjective("Service complete.");
-        return new ServiceResult(true, string.Empty, Sealant);
+        return new ServiceResult(true, string.Empty, Sealant, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1098,18 +1098,18 @@ public sealed class RunSimulation
     {
         returnPosition = default;
         if (Phase != RunPhase.Active)
-            return new WinchResult(false, "Run is not active.", default);
+            return new WinchResult(false, "Run is not active.", default, Array.Empty<object>());
         if (WinchUsed)
-            return new WinchResult(false, "Winch already spent: one use per run.", default);
+            return new WinchResult(false, "Winch already spent: one use per run.", default, Array.Empty<object>());
         if (_dockedNodeId is not null)
-            return new WinchResult(false, "Undock (J) before firing the winch: no teleport while docked.", default);
+            return new WinchResult(false, "Undock (J) before firing the winch: no teleport while docked.", default, Array.Empty<object>());
         if (!HasSafePosition)
-            return new WinchResult(false, "No safe position recorded yet.", default);
+            return new WinchResult(false, "No safe position recorded yet.", default, Array.Empty<object>());
 
         WinchUsed = true;
         returnPosition = LastSafePosition;
         Raise("winch.used", "Emergency winch fired: returning to last safe position.");
-        return new WinchResult(true, string.Empty, LastSafePosition);
+        return new WinchResult(true, string.Empty, LastSafePosition, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1134,27 +1134,27 @@ public sealed class RunSimulation
     public DockResult TryDock(string nodeId, float? measuredSpeedMps = null)
     {
         if (Phase != RunPhase.Active)
-            return new DockResult(false, "Run is not active.", null);
+            return new DockResult(false, "Run is not active.", null, Array.Empty<object>());
         if (_dockedNodeId is not null)
-            return new DockResult(false, $"Already docked at '{_dockedNodeId}': undock (J) first.", _dockedNodeId);
+            return new DockResult(false, "Already docked at '{0}': undock (J) first.", _dockedNodeId, _dockedNodeId);
         var node = _world.Nodes.FirstOrDefault(n => n.Id == nodeId);
         if (node is null)
-            return new DockResult(false, $"Unknown node '{nodeId}'.", null);
+            return new DockResult(false, "Unknown node '{0}'.", null, nodeId);
         if (!IsDockableNode(node))
-            return new DockResult(false, $"No docking station at '{nodeId}': dock only at objective or service stations.", null);
+            return new DockResult(false, "No docking station at '{0}': dock only at objective or service stations.", null, nodeId);
         var dist = Vector3.Distance(node.Position, ShipPosition);
         if (dist > DomainConstants.DockRangeMeters)
-            return new DockResult(false, $"Out of docking range ({dist:F0} m, need {DomainConstants.DockRangeMeters:F0} m).", null);
+            return new DockResult(false, "Out of docking range ({0:F0} m, need {1:F0} m).", null, dist, DomainConstants.DockRangeMeters);
         var speed = _shipSpeedMps;
         if (measuredSpeedMps.HasValue && float.IsFinite(measuredSpeedMps.Value) && measuredSpeedMps.Value >= 0f)
             speed = measuredSpeedMps.Value;
         if (speed > DomainConstants.DockMaxSpeedMetersPerSecond + 0.05f)
-            return new DockResult(false, $"Too fast to dock ({speed:F1} m/s, need ≤{DomainConstants.DockMaxSpeedMetersPerSecond:F0} m/s).", null);
+            return new DockResult(false, "Too fast to dock ({0:F1} m/s, need ≤{1:F0} m/s).", null, speed, DomainConstants.DockMaxSpeedMetersPerSecond);
 
         _dockedNodeId = node.Id;
         _dockAnchor = ShipPosition;
-        Raise("dock.done", $"Docked at {node.Id} ({dist:F0} m, {speed:F1} m/s). Station drill available (H).");
-        return new DockResult(true, string.Empty, node.Id);
+        Raise("dock.done", "Docked at {0} ({1:F0} m, {2:F1} m/s). Station drill available (H).", node.Id, dist, speed);
+        return new DockResult(true, string.Empty, node.Id, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1164,19 +1164,19 @@ public sealed class RunSimulation
     public UndockResult TryUndock()
     {
         if (Phase != RunPhase.Active)
-            return new UndockResult(false, "Run is not active.");
+            return new UndockResult(false, "Run is not active.", Array.Empty<object>());
         if (_dockedNodeId is null)
-            return new UndockResult(false, "Not docked.");
+            return new UndockResult(false, "Not docked.", Array.Empty<object>());
         var station = _dockedNodeId;
         _dockedNodeId = null;
         if (_drillLootSpawnId is not null)
         {
             _drillLootSpawnId = null;
             _drillElapsedSeconds = 0f;
-            Raise("drill.cancelled", $"Drill cancelled on undock from {station}: no salvage banked.");
+            Raise("drill.cancelled", "Drill cancelled on undock from {0}: no salvage banked.", station);
         }
-        Raise("dock.released", $"Undocked from {station}.");
-        return new UndockResult(true, string.Empty);
+        Raise("dock.released", "Undocked from {0}.", station);
+        return new UndockResult(true, string.Empty, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1190,30 +1190,30 @@ public sealed class RunSimulation
     public DrillResult TryStartDrill(string lootSpawnId)
     {
         if (Phase != RunPhase.Active)
-            return new DrillResult(false, "Run is not active.");
+            return new DrillResult(false, "Run is not active.", Array.Empty<object>());
         if (_dockedNodeId is null)
-            return new DrillResult(false, "Drill requires docking (J) at a station first.");
+            return new DrillResult(false, "Drill requires docking (J) at a station first.", Array.Empty<object>());
         if (_drillLootSpawnId is not null)
-            return new DrillResult(false, "Drill already running: cancel (H) first.");
+            return new DrillResult(false, "Drill already running: cancel (H) first.", Array.Empty<object>());
         var loot = _world.LootSpawns.FirstOrDefault(l => l.SpawnId == lootSpawnId);
         if (loot is null)
-            return new DrillResult(false, $"Unknown loot '{lootSpawnId}'.");
+            return new DrillResult(false, "Unknown loot '{0}'.", lootSpawnId);
         if (_collectedLoot.Contains(lootSpawnId))
-            return new DrillResult(false, "Already secured: duplicate drill rejected.");
+            return new DrillResult(false, "Already secured: duplicate drill rejected.", Array.Empty<object>());
         if (!string.IsNullOrEmpty(loot.QuestItemId) && _questRecovered.Contains(loot.QuestItemId))
-            return new DrillResult(false, "Quest item already secured: duplicate rejected.");
+            return new DrillResult(false, "Quest item already secured: duplicate rejected.", Array.Empty<object>());
         var dist = Vector3.Distance(loot.Position, ShipPosition);
         if (dist > DrillRangeMeters)
-            return new DrillResult(false, $"Out of drill range ({dist:F0} m, need {DrillRangeMeters:F0} m).");
+            return new DrillResult(false, "Out of drill range ({0:F0} m, need {1:F0} m).", dist, DrillRangeMeters);
         if (_cargo.Count >= _frame.CargoSlots)
-            return new DrillResult(false, "Cargo hold full: no free slot.");
+            return new DrillResult(false, "Cargo hold full: no free slot.", Array.Empty<object>());
         if (CargoUsedMassKg + loot.MassKg > _frame.CargoMaxMassKg)
-            return new DrillResult(false, $"Too heavy: needs {loot.MassKg:F0} kg free.");
+            return new DrillResult(false, "Too heavy: needs {0:F0} kg free.", loot.MassKg);
 
         _drillLootSpawnId = lootSpawnId;
         _drillElapsedSeconds = 0f;
-        Raise("drill.started", $"Drill started on {loot.Kind} ({dist:F0} m): hold position 8 s. 35 PU, threat rising.");
-        return new DrillResult(true, string.Empty);
+        Raise("drill.started", "Drill started on {0} ({1:F0} m): hold position 8 s. 35 PU, threat rising.", loot.Kind, dist);
+        return new DrillResult(true, string.Empty, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1223,13 +1223,13 @@ public sealed class RunSimulation
     public DrillResult TryCancelDrill()
     {
         if (Phase != RunPhase.Active)
-            return new DrillResult(false, "Run is not active.");
+            return new DrillResult(false, "Run is not active.", Array.Empty<object>());
         if (_drillLootSpawnId is null)
-            return new DrillResult(false, "No drill running.");
+            return new DrillResult(false, "No drill running.", Array.Empty<object>());
         _drillLootSpawnId = null;
         _drillElapsedSeconds = 0f;
         Raise("drill.cancelled", "Drill cancelled: no salvage banked.");
-        return new DrillResult(true, string.Empty);
+        return new DrillResult(true, string.Empty, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1242,18 +1242,18 @@ public sealed class RunSimulation
     public TrainingBreachResult TryInjectTrainingBreach()
     {
         if (Phase != RunPhase.Active)
-            return new TrainingBreachResult(false, "Run is not active.", -1);
+            return new TrainingBreachResult(false, "Run is not active.", -1, Array.Empty<object>());
         if (!_isTutorialRun)
-            return new TrainingBreachResult(false, "Training breach is tutorial-only.", -1);
+            return new TrainingBreachResult(false, "Training breach is tutorial-only.", -1, Array.Empty<object>());
         if (_trainingBreachInjected)
-            return new TrainingBreachResult(false, "Training breach already injected this run.", -1);
+            return new TrainingBreachResult(false, "Training breach already injected this run.", -1, Array.Empty<object>());
         if (_severity.Any(s => s > 0))
-            return new TrainingBreachResult(false, "Hull already breached: repair (R) first.", -1);
+            return new TrainingBreachResult(false, "Hull already breached: repair (R) first.", -1, Array.Empty<object>());
         _trainingBreachInjected = true;
         _severity[0] = 1;
         _noiseSpike += 8f;
-        Raise("hull.breach", $"Breach in {ZoneIds[0]} (severity 1) from training incident. Repair (R) with sealant.");
-        return new TrainingBreachResult(true, string.Empty, 0);
+        Raise("hull.breach", "Breach in {0} (severity 1) from training incident. Repair (R) with sealant.", ZoneIds[0]);
+        return new TrainingBreachResult(true, string.Empty, 0, Array.Empty<object>());
     }
 
     private void UpdateDrill(float dt)
@@ -1309,7 +1309,7 @@ public sealed class RunSimulation
         _drillLootSpawnId = null;
         _drillElapsedSeconds = 0f;
         BankLoot(loot, value);
-        Raise("drill.complete", $"Drill cut complete on {loot.Kind} (+{value} cr).");
+        Raise("drill.complete", "Drill cut complete on {0} (+{1} cr).", loot.Kind, value);
     }
 
     /// <summary>
@@ -1321,22 +1321,22 @@ public sealed class RunSimulation
     public ExtractResult TryExtract()
     {
         if (Phase != RunPhase.Active)
-            return new ExtractResult(false, "Run is not active.", null);
+            return new ExtractResult(false, "Run is not active.", null, Array.Empty<object>());
         var extraction = _world.GetNode(_world.ExtractionNodeId).Position;
         var dist = Vector3.Distance(extraction, ShipPosition);
         if (dist > DomainConstants.ExtractionRadiusMeters)
-            return new ExtractResult(false, $"Not in the extraction zone ({dist:F0} m, need {DomainConstants.ExtractionRadiusMeters:F0} m).", null);
+            return new ExtractResult(false, "Not in the extraction zone ({0:F0} m, need {1:F0} m).", null, dist, DomainConstants.ExtractionRadiusMeters);
         var progress = Contract;
         if (!progress.PrimaryComplete)
         {
             var missing = string.Join(", ", progress.Objectives.Where(o => !o.IsComplete).Select(o => $"{o.ObjectiveId} {o.Current}/{o.Required}"));
-            return new ExtractResult(false, $"Primary objectives incomplete: {missing}.", null);
+            return new ExtractResult(false, "Primary objectives incomplete: {0}.", null, missing);
         }
 
         Phase = RunPhase.Extracted;
         Settlement = BuildSuccessSettlement();
-        Raise("extract.success", $"Extracted with {Settlement.Credits} cr.");
-        return new ExtractResult(true, string.Empty, Settlement);
+        Raise("extract.success", "Extracted with {0} cr.", Settlement.Credits);
+        return new ExtractResult(true, string.Empty, Settlement, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1388,7 +1388,7 @@ public sealed class RunSimulation
         var incoming = roll < 0.6 ? 1 : roll < 0.9 ? 2 : 3;
         _severity[zone] = Math.Min(3, Math.Max(_severity[zone], incoming));
         _noiseSpike += 8f;
-        Raise("hull.breach", $"Breach in {ZoneIds[zone]} (severity {_severity[zone]}) from {cause}.");
+        Raise("hull.breach", "Breach in {0} (severity {1}) from {2}.", ZoneIds[zone], _severity[zone], cause);
     }
 
     private void UpdatePassiveContacts(float dt)
@@ -1489,7 +1489,7 @@ public sealed class RunSimulation
         var damage = creature.Def.AttackDamage;
         HullIntegrity = Math.Max(0f, HullIntegrity - damage);
         _noiseSpike += 8f;
-        Raise("creature.strike", $"{creature.Def.DisplayName} struck for {damage:F0} damage.");
+        Raise("creature.strike", "{0} struck for {1:F0} damage.", creature.Def.DisplayName, damage);
 
         if (creature.Def.Id == "creature.lampreech")
         {
@@ -1518,7 +1518,7 @@ public sealed class RunSimulation
         {
             var zone = _aiRng.NextInt(0, 4);
             _severity[zone] = Math.Min(3, _severity[zone] + 1);
-            Raise("hull.breach", $"Breach in {ZoneIds[zone]} (severity {_severity[zone]}) from creature strike.");
+            Raise("hull.breach", "Breach in {0} (severity {1}) from creature strike.", ZoneIds[zone], _severity[zone]);
         }
     }
 
@@ -1527,7 +1527,7 @@ public sealed class RunSimulation
         if (creature.State == next) return;
         creature.State = next;
         creature.StateTime = 0f;
-        Raise("creature.state", $"{creature.Def.DisplayName}: {next} ({why}).");
+        Raise("creature.state", "{0}: {1} ({2}).", creature.Def.DisplayName, next, why);
     }
 
     private CreatureRuntime? NearestRevealedApex()
@@ -1591,7 +1591,7 @@ public sealed class RunSimulation
             if (!o.IsComplete) continue;
             var key = "objective." + o.ObjectiveId;
             if (_completedAnnounced.Add(key))
-                Raise("contract.objective", $"Objective '{o.ObjectiveId}' complete. {update}");
+                Raise("contract.objective", "Objective '{0}' complete. {1}", o.ObjectiveId, update);
         }
         if (progress.PrimaryComplete && _completedAnnounced.Add("objective.ALL"))
             Raise("contract.complete", "Primary objectives complete. Extract.");
@@ -1666,9 +1666,9 @@ public sealed class RunSimulation
         return $"settle.{_world.RunSeed:x16}.{_runInstanceId:N}.{shortContract}";
     }
 
-    private void Raise(string kind, string message)
+    private void Raise(string kind, string message, params object[]? args)
     {
-        var evt = new RunEvent(ElapsedSeconds, kind, message);
+        var evt = new RunEvent(ElapsedSeconds, kind, message, args ?? Array.Empty<object>());
         _recent.Enqueue(evt);
         while (_recent.Count > 128) _recent.Dequeue();
         try

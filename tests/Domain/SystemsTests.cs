@@ -28,7 +28,7 @@ internal static class SystemsTests
             while (sim.FloodZones.All(z => z.Severity == 0) && guard++ < 120 && sim.Phase == RunPhase.Active)
                 sim.Tick(0.5f, sim.ShipPosition, DomainSetup.Idle);
             TestAssert.True(sim.FloodZones.Any(z => z.Severity > 0), "stress breach occurred");
-            TestAssert.True(sim.RecentEvents.Any(e => e.Kind == "hull.breach" && e.Message.Contains("pressure stress", StringComparison.Ordinal)), "pressure-stress breach event raised");
+            TestAssert.True(sim.RecentEvents.Any(e => e.Kind == "hull.breach" && e.Args.Any(a => a is string s && s.Contains("pressure stress", StringComparison.Ordinal))), "pressure-stress breach event raised");
         });
 
         Case("shallow water never stress-breaches", () =>
@@ -40,7 +40,7 @@ internal static class SystemsTests
             TestAssert.True(sim.PressureMargin > 0f, "shallow margin positive");
             for (var i = 0; i < 120; i++) sim.Tick(0.5f, sim.ShipPosition, DomainSetup.Idle);
             // Creature strikes may legitimately breach the hull; pressure must not.
-            TestAssert.False(sim.RecentEvents.Any(e => e.Kind == "hull.breach" && e.Message.Contains("pressure stress", StringComparison.Ordinal)), "no pressure-stress breaches in shallow water");
+            TestAssert.False(sim.RecentEvents.Any(e => e.Kind == "hull.breach" && e.Args.Any(a => a is string s && s.Contains("pressure stress", StringComparison.Ordinal))), "no pressure-stress breaches in shallow water");
         });
 
         Case("power deficit sheds load and browns out", () =>

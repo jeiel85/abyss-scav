@@ -55,7 +55,7 @@ public partial class RunController : Node3D
         AbyssInput.EnsureRegistered();
         if (!GameServices.IsInitialized)
         {
-            ShowFatal("Boot services unavailable. Return to menu and relaunch.");
+            ShowFatal(Localization.T("Boot services unavailable. Return to menu and relaunch."));
             return;
         }
         _store = new FileSaveStore(GameServices.Paths.SavesDir);
@@ -64,7 +64,7 @@ public partial class RunController : Node3D
 
         if (!ContentCatalog.TryBuild(out var catalog, out var errors) || catalog is null)
         {
-            ShowFatal("Content catalog failed: " + string.Join("; ", errors));
+            ShowFatal(Localization.T("Content catalog failed: {0}", (object)string.Join("; ", errors)));
             return;
         }
         _catalog = catalog;
@@ -72,7 +72,7 @@ public partial class RunController : Node3D
         RunLaunchContext.Pending = null;
         if (!_options.TryValidate(catalog, out var problems))
         {
-            ShowFatal("Launch selection invalid: " + string.Join("; ", problems));
+            ShowFatal(Localization.T("Launch selection invalid: {0}", (object)string.Join("; ", problems)));
             return;
         }
         // Fresh ownership at run start: a module-equipped production launch
@@ -80,7 +80,7 @@ public partial class RunController : Node3D
         // skip-gate). Stock loadouts skip the gate exactly as before.
         if (_options.EffectiveModuleIds.Count > 0)
         {
-            _hud?.ShowMessage("Verifying module ownership…", 3f);
+            _hud?.ShowMessage(Localization.T("Verifying module ownership…"), 3f);
             VerifyOwnershipAndBuildAsync();
             return;
         }
@@ -111,20 +111,20 @@ public partial class RunController : Node3D
         catch (SaveException ex)
         {
             if (!IsInstanceValid(this)) return;
-            ShowFatal($"Module loadout cannot be verified: profile unreadable [{ex.Code}]: {ex.Message}");
+            ShowFatal(Localization.T("Module loadout cannot be verified: profile unreadable [{0}]: {1}", (object)ex.Code, ex.Message));
             return;
         }
         catch (Exception ex)
         {
             if (!IsInstanceValid(this)) return;
-            ShowFatal($"Module loadout cannot be verified: profile unreadable ({ex.GetType().Name}).");
+            ShowFatal(Localization.T("Module loadout cannot be verified: profile unreadable ({0}).", (object)ex.GetType().Name));
             return;
         }
         if (!IsInstanceValid(this) || _ended) return;
         var owned = new HashSet<string>(live.Unlocks.Blueprints, StringComparer.Ordinal);
         if (!ModuleLoadout.TryValidate(moduleIds, catalog, owned, out var modErrors))
         {
-            ShowFatal("Module loadout refused at run start: " + string.Join("; ", modErrors));
+            ShowFatal(Localization.T("Module loadout refused at run start: {0}", (object)string.Join("; ", modErrors)));
             return;
         }
         BuildRun(ownedForGate: owned);
@@ -144,19 +144,19 @@ public partial class RunController : Node3D
             : options.EffectiveOwnedBlueprints;
         if (options.EffectiveModuleIds.Count > 0 && gate is null)
         {
-            ShowFatal("Module loadout refused at run start: live ownership unavailable.");
+            ShowFatal(Localization.T("Module loadout refused at run start: live ownership unavailable."));
             return;
         }
         _buildReady = true;
         var request = new RunGenerationRequest(options.RunSeed, options.BiomeId, options.ContractId, catalog);
         if (!TrenchGenerator.TryGenerate(request, out var world, out var verdict, out var reason) || world is null)
         {
-            ShowFatal("Generation refused: " + reason);
+            ShowFatal(Localization.T("Generation refused: {0}", (object)reason));
             return;
         }
         if (!verdict.IsValid)
         {
-            ShowFatal("World invalid: " + string.Join("; ", verdict.Errors));
+            ShowFatal(Localization.T("World invalid: {0}", (object)string.Join("; ", verdict.Errors)));
             return;
         }
         _world = world;
@@ -165,7 +165,7 @@ public partial class RunController : Node3D
                 options.ModifierIds, options.InsuranceId, out var sim, out var simReason,
                 options.EffectiveModuleIds, gate, options.IsTutorial) || sim is null)
         {
-            ShowFatal("Run rejected: " + simReason);
+            ShowFatal(Localization.T("Run rejected: {0}", (object)simReason));
             return;
         }
         _sim = sim;
@@ -181,10 +181,10 @@ public partial class RunController : Node3D
         }
         // Flow bookkeeping: RunLoading -> InRun once the scene is constructed.
         GameServices.Flow.TryTransition(AppScene.InRun, out _);
-        _hud?.ShowMessage($"Dive live: {catalog.Contracts[world.ContractId].Archetype} in {catalog.Biomes[world.BiomeId].DisplayName}. Follow cyan landmarks; F to ping.", 7f);
+        _hud?.ShowMessage(Localization.T("Dive live: {0} in {1}. Follow cyan landmarks; F to ping.", Localization.T(catalog.Contracts[world.ContractId].Archetype), Localization.T(catalog.Biomes[world.BiomeId].DisplayName)), 7f);
         if (_isTutorial)
         {
-            _hud?.ShowMessage("Tutorial: The First Ping — follow the top-left checklist. Dock (J), drill (H), and repair (R) are mandatory; optional steps can skip.", 8f);
+            _hud?.ShowMessage(Localization.T("Tutorial: The First Ping — follow the top-left checklist. Dock (J), drill (H), and repair (R) are mandatory; optional steps can skip."), 8f);
         }
         GodotLogBridge.Info(GameServices.Logger, $"Run started seed={world.RunSeed} biome={world.BiomeId} contract={world.ContractId} nodes={world.Nodes.Count}.");
     }
@@ -225,7 +225,7 @@ public partial class RunController : Node3D
     private void OnHullBump(Node body)
     {
         // Hull scrape: small honest feedback, domain damage stays with creatures/pressure.
-        _hud?.ShowMessage("Hull scrape — corridor wall. Ease off the thrust.", 2.5f);
+        _hud?.ShowMessage(Localization.T("Hull scrape — corridor wall. Ease off the thrust."), 2.5f);
         _audio?.PlayClunk();
     }
 
@@ -240,7 +240,7 @@ public partial class RunController : Node3D
         _hud.BuddyToggled += on =>
         {
             if (_buddy is not null) _buddy.Enabled = on;
-            _hud?.ShowMessage(on ? "Sonar buddy on." : "Sonar buddy off — instruments only.", 2.5f);
+            _hud?.ShowMessage(on ? Localization.T("Sonar buddy on.") : Localization.T("Sonar buddy off — instruments only."), 2.5f);
         };
         _audio?.ApplyVolume(GameServices.Settings.MasterVolumePercent);
     }
@@ -283,7 +283,7 @@ public partial class RunController : Node3D
             _director.Setup(profile.Tutorial.CompletedSteps ?? new List<string>());
             if (profile.Tutorial.Completed && _hud is not null && IsInstanceValid(_hud))
             {
-                _hud.ShowMessage("Tutorial replay — steps already logged; checklist resumes complete.", 5f);
+                _hud.ShowMessage(Localization.T("Tutorial replay — steps already logged; checklist resumes complete."), 5f);
             }
         }
         catch (OperationCanceledException)
@@ -293,13 +293,13 @@ public partial class RunController : Node3D
         {
             if (!IsInstanceValid(this)) return;
             _tutorialSaveUsable = false;
-            _hud?.ShowMessage($"Tutorial progress cannot be saved [{ex.Code}]: the run continues, steps just will not persist.", 6f);
+            _hud?.ShowMessage(Localization.T("Tutorial progress cannot be saved [{0}]: the run continues, steps just will not persist.", (object)ex.Code), 6f);
         }
         catch (Exception ex)
         {
             if (!IsInstanceValid(this)) return;
             _tutorialSaveUsable = false;
-            _hud?.ShowMessage($"Tutorial progress cannot be saved ({ex.GetType().Name}): the run continues.", 6f);
+            _hud?.ShowMessage(Localization.T("Tutorial progress cannot be saved ({0}): the run continues.", (object)ex.GetType().Name), 6f);
         }
     }
 
@@ -358,14 +358,14 @@ public partial class RunController : Node3D
         {
             if (!IsInstanceValid(this)) return false;
             _tutorialSaveUsable = false;
-            _hud?.ShowMessage($"Tutorial progress not saved [{ex.Code}]: the run still counts; steps retry next tutorial launch.", 6f);
+            _hud?.ShowMessage(Localization.T("Tutorial progress not saved [{0}]: the run still counts; steps retry next tutorial launch.", (object)ex.Code), 6f);
             return false;
         }
         catch (Exception ex)
         {
             if (!IsInstanceValid(this)) return false;
             _tutorialSaveUsable = false;
-            _hud?.ShowMessage($"Tutorial progress not saved ({ex.GetType().Name}): the run still counts; steps retry next tutorial launch.", 6f);
+            _hud?.ShowMessage(Localization.T("Tutorial progress not saved ({0}): the run still counts; steps retry next tutorial launch.", (object)ex.GetType().Name), 6f);
             return false;
         }
     }
@@ -399,7 +399,7 @@ public partial class RunController : Node3D
             {
                 _trainingBreachDone = true;
                 _audio?.PlayAlarm();
-                _hud.ShowMessage("Training incident: real hull breach — press R to weld it with sealant.", 6f);
+                _hud.ShowMessage(Localization.T("Training incident: real hull breach — press R to weld it with sealant."), 6f);
             }
         }
         if (_director is not null && !_ended)
@@ -434,15 +434,15 @@ public partial class RunController : Node3D
         _hud.Sonar.UpdateContacts(_sim.Contacts, pulseRange, _sub.GlobalPosition, heading, objective, extract, nearest, _quiet);
         if (_buddy is not null) _hud.Sonar.SetTrail(_buddy.Trail);
         var objName = _world.ObjectiveNodeId;
-        _hud.Sonar.SetObjectiveText(objName.Replace("node.", "SITE "));
+        _hud.Sonar.SetObjectiveText(objName.Replace("node.", Localization.T("SITE") + " "));
         // Steady warning banner (no flashing): threat, power, hull, cooldown.
         var warn = "";
-        if (_sim.IsDrilling) warn = $"DRILL TURNING — { _sim.DrillRemainingSeconds:F0}s left, 35 PU, hold position (H cancels)";
-        else if (_sim.IsDocked) warn = "DOCKED — drill (H) or undock (J)";
-        else if (_sim.Threat > 70f) warn = "THREAT HIGH — go quiet (Z) or break contact";
-        else if (_sim.BrownoutActive) warn = "BROWNOUT — sonar offline, cut thrust";
-        else if (_sim.HullIntegrity < _sim.MaxHull * 0.3f) warn = "HULL CRITICAL — repair (R) or winch (X)";
-        else if (_sim.PressureMargin < 0f) warn = "CRUSH DEPTH — ascend or ease deeper load";
+        if (_sim.IsDrilling) warn = Localization.T("DRILL TURNING — {0:F0}s left, 35 PU, hold position (H cancels)", _sim.DrillRemainingSeconds);
+        else if (_sim.IsDocked) warn = Localization.T("DOCKED — drill (H) or undock (J)");
+        else if (_sim.Threat > 70f) warn = Localization.T("THREAT HIGH — go quiet (Z) or break contact");
+        else if (_sim.BrownoutActive) warn = Localization.T("BROWNOUT — sonar offline, cut thrust");
+        else if (_sim.HullIntegrity < _sim.MaxHull * 0.3f) warn = Localization.T("HULL CRITICAL — repair (R) or winch (X)");
+        else if (_sim.PressureMargin < 0f) warn = Localization.T("CRUSH DEPTH — ascend or ease deeper load");
         _hud.SetWarning(warn);
         if (_sim.Threat > 70f && _audio is not null)
         {
@@ -477,7 +477,7 @@ public partial class RunController : Node3D
         {
             _quiet = !_quiet;
             sub.QuietMode = _quiet; // physical thrust cap, not just domain.
-            _hud?.ShowMessage(_quiet ? "Quiet running: thrust capped, active sonar disabled." : "Normal running.", 3f);
+            _hud?.ShowMessage(_quiet ? Localization.T("Quiet running: thrust capped, active sonar disabled.") : Localization.T("Normal running."), 3f);
             if (_hud is not null)
             {
                 _hud.Sonar.UpdateContacts(Array.Empty<ContactSnapshot>(), PulseRange(), sub.GlobalPosition, 0f,
@@ -502,12 +502,12 @@ public partial class RunController : Node3D
         var result = _sim.Pulse();
         if (!result.Success)
         {
-            _hud.ShowMessage("Ping refused: " + result.Reason, 3f);
+            _hud.ShowMessage(Localization.T("Ping refused: {0}", (object)Localization.T(result.Reason, result.Args)), 3f);
             return;
         }
         _lastPulseContacts = result.Contacts;
         _audio.PlayPing();
-        _hud.ShowMessage($"Ping: {result.Contacts.Count} contacts. +{result.ThreatAdded:F0} threat.", 3f);
+        _hud.ShowMessage(Localization.T("Ping: {0} contacts. +{1:F0} threat.", result.Contacts.Count, result.ThreatAdded), 3f);
         RefreshHud();
     }
 
@@ -518,14 +518,14 @@ public partial class RunController : Node3D
         var best = NearestLoot(reach);
         if (best is null)
         {
-            _hud.ShowMessage($"No salvage within {reach:F0} m — ping (F), close in, then E.", 3f);
+            _hud.ShowMessage(Localization.T("No salvage within {0:F0} m — ping (F), close in, then E.", reach), 3f);
             return;
         }
         var result = _sim.TrySalvage(best.SpawnId);
         if (result.Success)
         {
             _audio.PlayClunk();
-            _hud.ShowMessage($"Secured {best.Kind} +{result.ValueBanked} cr{(result.QuestItemId != "" ? $" [{result.QuestItemId}]" : "")}.", 4f);
+            _hud.ShowMessage(Localization.T("Secured {0} +{1} cr{2}.", Localization.T(best.Kind.ToString()), result.ValueBanked, result.QuestItemId != "" ? " [" + result.QuestItemId + "]" : ""), 4f);
             // Codex discovery (real play only): relic/bio/quest salvage carries a
             // catalog trait id; scrap and crates carry none.
             if (!string.IsNullOrEmpty(best.TraitId) && _catalog is not null
@@ -536,7 +536,7 @@ public partial class RunController : Node3D
         }
         else
         {
-            _hud.ShowMessage("Salvage refused: " + result.Reason, 4f);
+            _hud.ShowMessage(Localization.T("Salvage refused: {0}", (object)Localization.T(result.Reason, result.Args)), 4f);
         }
         RefreshHud();
     }
@@ -555,11 +555,11 @@ public partial class RunController : Node3D
         }
         if (best is null)
         {
-            _hud.ShowMessage("No unsurveyed contacts — ping (F) first.", 3f);
+            _hud.ShowMessage(Localization.T("No unsurveyed contacts — ping (F) first."), 3f);
             return;
         }
         var result = _sim.TrySurvey(best.ContactId);
-        _hud.ShowMessage(result.Success ? $"Surveyed {best.Class} ({_sim.SurveysDone} total)." : "Survey refused: " + result.Reason, 4f);
+        _hud.ShowMessage(result.Success ? Localization.T("Surveyed {0} ({1} total).", Localization.T(best.Class.ToString()), _sim.SurveysDone) : Localization.T("Survey refused: {0}", (object)Localization.T(result.Reason, result.Args)), 4f);
         if (result.Success)
         {
             _audio.PlayTick();
@@ -606,11 +606,11 @@ public partial class RunController : Node3D
         }
         if (bestNode is null)
         {
-            _hud.ShowMessage("No contract service node on this route leg.", 3f);
+            _hud.ShowMessage(Localization.T("No contract service node on this route leg."), 3f);
             return;
         }
         var result = _sim.TryServiceContractNode(bestNode);
-        _hud.ShowMessage(result.Success ? $"Serviced {bestNode} (sealant {result.SealantRemaining})." : "Service refused: " + result.Reason, 4f);
+        _hud.ShowMessage(result.Success ? Localization.T("Serviced {0} (sealant {1}).", bestNode, result.SealantRemaining) : Localization.T("Service refused: {0}", (object)Localization.T(result.Reason, result.Args)), 4f);
         if (result.Success) _audio.PlayChime();
         RefreshHud();
     }
@@ -628,11 +628,11 @@ public partial class RunController : Node3D
         }
         if (worst < 0)
         {
-            _hud.ShowMessage("No breaches — compartments holding.", 3f);
+            _hud.ShowMessage(Localization.T("No breaches — compartments holding."), 3f);
             return;
         }
         var result = _sim.TryRepairHull(worst);
-        _hud.ShowMessage(result.Success ? $"Welded {zones[worst].ZoneId} (sealant {result.SealantRemaining})." : "Repair refused: " + result.Reason, 4f);
+        _hud.ShowMessage(result.Success ? Localization.T("Welded {0} (sealant {1}).", zones[worst].ZoneId, result.SealantRemaining) : Localization.T("Repair refused: {0}", (object)Localization.T(result.Reason, result.Args)), 4f);
         if (result.Success) _audio.PlayClunk();
         RefreshHud();
     }
@@ -645,11 +645,11 @@ public partial class RunController : Node3D
             var result = _sim.TryUndock();
             if (!result.Success)
             {
-                _hud.ShowMessage("Undock refused: " + result.Reason, 3f);
+                _hud.ShowMessage(Localization.T("Undock refused: {0}", (object)Localization.T(result.Reason, result.Args)), 3f);
                 return;
             }
             ApplyDockFreeze();
-            _hud.ShowMessage("Undocked — hull free. Drill cancelled if one was running (no award).", 4f);
+            _hud.ShowMessage(Localization.T("Undocked — hull free. Drill cancelled if one was running (no award)."), 4f);
             RefreshHud();
             return;
         }
@@ -665,19 +665,19 @@ public partial class RunController : Node3D
         }
         if (bestNode is null)
         {
-            _hud.ShowMessage("No docking station on this route leg.", 3f);
+            _hud.ShowMessage(Localization.T("No docking station on this route leg."), 3f);
             return;
         }
         var speed = _sub.LinearVelocity.Length();
         var dock = _sim.TryDock(bestNode, speed);
         if (!dock.Success)
         {
-            _hud.ShowMessage("Dock refused: " + dock.Reason, 4f);
+            _hud.ShowMessage(Localization.T("Dock refused: {0}", (object)Localization.T(dock.Reason, dock.Args)), 4f);
             return;
         }
         ApplyDockFreeze();
         _audio?.PlayClunk();
-        _hud.ShowMessage($"Docked at {bestNode} — hull held at safe offset. Drill (H) available; undock with J.", 5f);
+        _hud.ShowMessage(Localization.T("Docked at {0} — hull held at safe offset. Drill (H) available; undock with J.", (object)bestNode), 5f);
         RefreshHud();
     }
 
@@ -697,13 +697,13 @@ public partial class RunController : Node3D
         {
             // Toggle: second press cancels with no award.
             var cancel = _sim.TryCancelDrill();
-            _hud.ShowMessage(cancel.Success ? "Drill cancelled — no salvage banked." : "Drill cancel refused: " + cancel.Reason, 3f);
+            _hud.ShowMessage(cancel.Success ? Localization.T("Drill cancelled — no salvage banked.") : Localization.T("Drill cancel refused: {0}", (object)Localization.T(cancel.Reason, cancel.Args)), 3f);
             RefreshHud();
             return;
         }
         if (!_sim.IsDocked)
         {
-            _hud.ShowMessage("Drill needs a docked station: slow to ≤2 m/s within 25 m and press J first.", 4f);
+            _hud.ShowMessage(Localization.T("Drill needs a docked station: slow to ≤2 m/s within 25 m and press J first."), 4f);
             return;
         }
         var reach = _sim.DrillRangeMeters;
@@ -719,13 +719,13 @@ public partial class RunController : Node3D
         }
         if (best is null)
         {
-            _hud.ShowMessage($"No drill target within {reach:F0} m — cores drill here; other salvage uses E. Hold H for 8 s once docked.", 4f);
+            _hud.ShowMessage(Localization.T("No drill target within {0:F0} m — cores drill here; other salvage uses E. Hold H for 8 s once docked.", reach), 4f);
             return;
         }
         var result = _sim.TryStartDrill(best.SpawnId);
         _hud.ShowMessage(result.Success
-            ? $"Drill turning on {best.Kind} — hold H and hold position 8 s (35 PU, threat rising). Release/second-press cancels with no award."
-            : "Drill refused: " + result.Reason, 4f);
+            ? Localization.T("Drill turning on {0} — hold H and hold position 8 s (35 PU, threat rising). Release/second-press cancels with no award.", (object)Localization.T(best.Kind.ToString()))
+            : Localization.T("Drill refused: {0}", (object)Localization.T(result.Reason, result.Args)), 4f);
         RefreshHud();
     }
 
@@ -735,7 +735,7 @@ public partial class RunController : Node3D
         if (!_sim.IsDrilling) return;
         // Hold semantics: releasing H before the 8 s cut completes cancels it.
         var cancel = _sim.TryCancelDrill();
-        if (cancel.Success) _hud.ShowMessage("Drill released early — no salvage banked.", 3f);
+        if (cancel.Success) _hud.ShowMessage(Localization.T("Drill released early — no salvage banked."), 3f);
         RefreshHud();
     }
 
@@ -745,13 +745,13 @@ public partial class RunController : Node3D
         var result = _sim.TryUseWinch(out var pos);
         if (!result.Success)
         {
-            _hud.ShowMessage("Winch refused: " + result.Reason, 3f);
+            _hud.ShowMessage(Localization.T("Winch refused: {0}", (object)Localization.T(result.Reason, result.Args)), 3f);
             return;
         }
         _sub.GlobalPosition = WorldBuilder.ToG(pos);
         _sub.LinearVelocity = Vector3.Zero;
         _sub.AngularVelocity = Vector3.Zero;
-        _hud.ShowMessage("Emergency winch fired — back at last safe water.", 4f);
+        _hud.ShowMessage(Localization.T("Emergency winch fired — back at last safe water."), 4f);
         RefreshHud();
     }
 
@@ -761,7 +761,7 @@ public partial class RunController : Node3D
         var result = _sim.TryExtract();
         if (!result.Success || result.Settlement is null)
         {
-            _hud.ShowMessage("Extraction refused: " + result.Reason, 5f);
+            _hud.ShowMessage(Localization.T("Extraction refused: {0}", (object)Localization.T(result.Reason, result.Args)), 5f);
             return;
         }
         if (_isTutorial && _director is not null)
@@ -808,39 +808,48 @@ public partial class RunController : Node3D
         return best;
     }
 
+    private static object[] TranslateArgs(object[] args)
+    {
+        if (args.Length == 0) return args;
+        var translated = new object[args.Length];
+        for (var i = 0; i < args.Length; i++)
+            translated[i] = args[i] is string s ? Localization.T(s) : args[i];
+        return translated;
+    }
+
     private void OnSimEvent(RunEvent evt)
     {
-        // Surface honest host events; alarms get both audio and the steady banner.
+        var text = Localization.T(evt.Message, TranslateArgs(evt.Args));
         switch (evt.Kind)
         {
             case "creature.strike":
             case "hull.breach":
                 _audio?.PlayAlarm();
-                _hud?.ShowMessage(evt.Message, 4f);
+                _hud?.ShowMessage(text, 4f);
                 break;
             case "contract.objective":
             case "contract.complete":
             case "drill.complete":
             case "dock.done":
                 _audio?.PlayChime();
-                _hud?.ShowMessage(evt.Message, 5f);
+                _hud?.ShowMessage(text, 5f);
                 break;
             case "drill.cancelled":
             case "dock.released":
             case "drill.started":
-                _hud?.ShowMessage(evt.Message, 4f);
+                _hud?.ShowMessage(text, 4f);
                 break;
             case "run.failed":
-                break; // handled by phase poll with the fail panel.
+                break;
             default:
                 if (evt.Kind.StartsWith("power.", StringComparison.Ordinal) ||
                     evt.Kind.StartsWith("pressure.", StringComparison.Ordinal))
                 {
-                    _hud?.ShowMessage(evt.Message, 3f);
+                    _hud?.ShowMessage(text, 3f);
                 }
                 break;
         }
-        GodotLogBridge.Info(GameServices.Logger, $"[run] {evt.Kind}: {evt.Message}");
+        GodotLogBridge.Info(GameServices.Logger, $"[run] {evt.Kind}: {string.Format(evt.Message, evt.Args)}");
     }
 
     private void SyncThreatMarkers()
@@ -890,7 +899,7 @@ public partial class RunController : Node3D
         _audio?.PlayAlarm();
         if (draft is null)
         {
-            _hud?.ShowEnd("DIVE FAILED", $"{_sim.FailureReason}\nSettlement unavailable (phase mismatch). Return to menu; nothing was credited.", false);
+            _hud?.ShowEnd(Localization.T("DIVE FAILED"), Localization.T(_sim.FailureReason) + "\n" + Localization.T("Settlement unavailable (phase mismatch). Return to menu; nothing was credited."), false);
             return;
         }
         _pendingDraft = draft;
@@ -909,7 +918,7 @@ public partial class RunController : Node3D
             // extract can never count as completion.
             _tutorialExtractionObserved = true;
             _tutorialEndNote = "";
-            _hud?.ShowMessage("Extraction confirmed — settling the dive.", 5f);
+            _hud?.ShowMessage(Localization.T("Extraction confirmed — settling the dive."), 5f);
         }
         SettleAsync(draft, failed: false);
     }
@@ -923,10 +932,10 @@ public partial class RunController : Node3D
         // allowed, so the run still counts on screen — just not persisted.
         if (GameServices.WritesSuspendedByChoice)
         {
-            var choiceNote = "Not saved by choice: this unsaved session records nothing to the profile.";
-            var tutNote = _isTutorial ? "\nTutorial steps retry next tutorial launch." : "";
-            _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
-                $"{(failed ? _sim?.FailureReason + "\n" : "")}Settlement {draft.SettlementId}: {draft.RetainedCredits} cr, {draft.ResearchData} research, {draft.Shards} shards.\n{choiceNote}{tutNote}", false);
+            var choiceNote = Localization.T("Not saved by choice: this unsaved session records nothing to the profile.");
+            var tutNote = _isTutorial ? "\n" + Localization.T("Tutorial steps retry next tutorial launch.") : "";
+            _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+                (failed ? Localization.T(_sim!.FailureReason) + "\n" : "") + Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + choiceNote + tutNote, false);
             _hud.SetEndButtons(retryVisible: false, menuEnabled: true);
             GodotLogBridge.Info(GameServices.Logger, $"Settlement {draft.SettlementId} skipped (unsaved session by choice).");
             return;
@@ -935,9 +944,9 @@ public partial class RunController : Node3D
         _settleCts?.Dispose();
         _settleCts = new CancellationTokenSource();
         var ct = _settleCts.Token;
-        _saveState = "Saving settlement…";
-        _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
-            $"{(failed ? _sim?.FailureReason + "\n" : "")}Settlement {draft.SettlementId}: {draft.RetainedCredits} cr, {draft.ResearchData} research, {draft.Shards} shards.\n{_saveState}", false);
+        _saveState = Localization.T("Saving settlement…");
+        _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+            (failed ? Localization.T(_sim!.FailureReason) + "\n" : "") + Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + _saveState, false);
         _hud.SetEndButtons(retryVisible: false, menuEnabled: false); // hold exit until the write lands.
         var payload = new SettlementPayload(draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards,
             Array.Empty<string>(), Array.Empty<string>(), BuildCodexDiscovery(draft, failed),
@@ -948,8 +957,8 @@ public partial class RunController : Node3D
             var result = await _store.ApplySettlementAsync(payload, ct);
             if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
             var note = result.Outcome == SettlementApplyOutcome.AlreadyApplied
-                ? "Already credited (duplicate safely ignored)."
-                : "Credited once to the settlement ledger.";
+                ? Localization.T("Already credited (duplicate safely ignored).")
+                : Localization.T("Credited once to the settlement ledger.");
             GodotLogBridge.Info(GameServices.Logger, $"Settlement {draft.SettlementId} applied: {result.Outcome}.");
             var endNote = "";
             if (_isTutorial && !failed)
@@ -957,18 +966,18 @@ public partial class RunController : Node3D
                 // Held tutorial write: no timeout fake-claim. Success text
                 // appears only when actually persisted; failures stay visible
                 // and steps retry next tutorial launch.
-                _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
-                    $"Settlement {draft.SettlementId}: {draft.RetainedCredits} cr, {draft.ResearchData} research, {draft.Shards} shards.\n{note}\nSaving tutorial progress…", false);
+                _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+                    Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + note + "\n" + Localization.T("Saving tutorial progress…"), false);
                 var tutOk = await PersistTutorialCompletionAsync(ct);
                 if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
                 endNote = tutOk
-                    ? "\nTutorial complete: The First Ping logged to your profile."
-                    : "\nTutorial finished, but progress could not be saved — the run still counts; steps retry next tutorial launch.";
-                if (tutOk) _hud.ShowMessage("Tutorial complete: The First Ping.", 7f);
+                    ? "\n" + Localization.T("Tutorial complete: The First Ping logged to your profile.")
+                    : "\n" + Localization.T("Tutorial finished, but progress could not be saved — the run still counts; steps retry next tutorial launch.");
+                if (tutOk) _hud.ShowMessage(Localization.T("Tutorial complete: The First Ping."), 7f);
             }
             _tutorialEndNote = endNote;
-            _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
-                $"Settlement {draft.SettlementId}: {draft.RetainedCredits} cr, {draft.ResearchData} research, {draft.Shards} shards.\n{note}{endNote}", false);
+            _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+                Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + note + endNote, false);
             _hud.SetEndButtons(retryVisible: false, menuEnabled: true);
         }
         catch (OperationCanceledException)
@@ -981,16 +990,16 @@ public partial class RunController : Node3D
             // No fake credit: visible retry keeps the same idempotent id, so a
             // retry can never double-award even across processes.
             GodotLogBridge.Error(GameServices.Logger, $"Settlement save failed [{ex.Code}]: {ex.Message}", ex.Code);
-            _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
-                $"Settlement {draft.SettlementId}: {draft.RetainedCredits} cr pending — save failed [{ex.Code}]: {ex.Message}\nNothing was credited. Retry when storage is available.", true);
+            _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+                Localization.T("Settlement {0}: {1} cr pending — save failed [{2}]: {3}\nNothing was credited. Retry when storage is available.", draft.SettlementId, draft.RetainedCredits, (object)ex.Code, ex.Message), true);
             _hud.SetEndButtons(retryVisible: true, menuEnabled: true);
         }
         catch (Exception ex)
         {
             if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
             GodotLogBridge.Error(GameServices.Logger, "Settlement save failed unexpectedly: " + ex.GetType().Name, "SAVE-001");
-            _hud.ShowEnd(failed ? "DIVE FAILED" : "EXTRACTION COMPLETE",
-                $"Settlement {draft.SettlementId}: {draft.RetainedCredits} cr pending — unexpected save fault.\nNothing was credited. Retry when storage is available.", true);
+            _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+                Localization.T("Settlement {0}: {1} cr pending — unexpected save fault.\nNothing was credited. Retry when storage is available.", draft.SettlementId, draft.RetainedCredits), true);
             _hud.SetEndButtons(retryVisible: true, menuEnabled: true);
         }
         finally
@@ -1059,7 +1068,7 @@ public partial class RunController : Node3D
         {
             // A settlement write is in flight: hold exit until it completes so
             // the award can never be lost by leaving mid-write.
-            _hud?.ShowMessage("Settlement write in flight — exit held until it completes.", 3f);
+            _hud?.ShowMessage(Localization.T("Settlement write in flight — exit held until it completes."), 3f);
             return;
         }
         SetPaused(false);
@@ -1110,7 +1119,7 @@ public partial class RunController : Node3D
         box.AddChild(_fatalLabel);
         var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         box.AddChild(row);
-        var menu = new Button { Text = "Return to menu", CustomMinimumSize = new Vector2(220, 38) };
+        var menu = new Button { Text = Localization.T("Return to menu"), CustomMinimumSize = new Vector2(220, 38) };
         menu.Pressed += () => GetTree()?.CallDeferred(SceneTree.MethodName.ChangeSceneToFile, "res://scenes/main_menu.tscn");
         row.AddChild(menu);
         _ended = true;

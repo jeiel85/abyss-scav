@@ -1,5 +1,6 @@
 using AbyssScav.App;
 using AbyssScav.Domain;
+using AbyssScav.Foundation;
 using AbyssScav.Infra.Logging;
 using Godot;
 
@@ -155,15 +156,15 @@ public partial class TutorialDirector : Control
     public bool TrySkip(out string reason)
     {
         reason = string.Empty;
-        if (AllComplete) { reason = "Tutorial already complete."; return false; }
+        if (AllComplete) { reason = Localization.T("Tutorial already complete."); return false; }
         var id = StepOrder[_current];
         if (MandatorySteps.Contains(id))
         {
             reason = id == StepExtract
-                ? "Extraction requires real delivery to the green ring (T) — cannot skip."
+                ? Localization.T("Extraction requires real delivery to the green ring (T) — cannot skip.")
                 : id == StepDock
-                    ? "Docking (J) at the station is required — cannot skip."
-                    : "Breach repair (R) with sealant is required — cannot skip.";
+                    ? Localization.T("Docking (J) at the station is required — cannot skip.")
+                    : Localization.T("Breach repair (R) with sealant is required — cannot skip.");
             _skipNote = reason;
             RefreshDetail();
             return false;
@@ -235,7 +236,7 @@ public partial class TutorialDirector : Control
         box.AddThemeConstantOverride("separation", 3);
         panel.AddChild(box);
 
-        var title = new Label { Text = "TUTORIAL — THE FIRST PING" };
+        var title = new Label { Text = Localization.T("TUTORIAL — THE FIRST PING") };
         title.AddThemeFontSizeOverride("font_size", 14);
         title.AddThemeColorOverride("font_color", new Color("#71d9d1"));
         box.AddChild(title);
@@ -256,8 +257,8 @@ public partial class TutorialDirector : Control
         _detail.AddThemeColorOverride("font_color", new Color("#dae4df"));
         box.AddChild(_detail);
 
-        _skip = new Button { Text = "Skip step" };
-        _skip.TooltipText = "Tutorial only: skips OPTIONAL steps (steer/listen/ping/salvage). Dock, repair, and extract are mandatory and cannot be skipped.";
+        _skip = new Button { Text = Localization.T("Skip step") };
+        _skip.TooltipText = Localization.T("Tutorial only: skips OPTIONAL steps (steer/listen/ping/salvage). Dock, repair, and extract are mandatory and cannot be skipped.");
         _skip.FocusMode = FocusModeEnum.All;
         _skip.Pressed += SkipCurrent;
         box.AddChild(_skip);
@@ -276,17 +277,17 @@ public partial class TutorialDirector : Control
             var skipped = _skipped.Contains(id);
             if (_done.Contains(id))
             {
-                label.Text = (skipped ? "○ " : "✓ ") + Titles[id] + (skipped ? " (skipped)" : "");
+                label.Text = (skipped ? "○ " : "✓ ") + Localization.T(Titles[id]) + (skipped ? Localization.T(" (skipped)") : "");
                 label.AddThemeColorOverride("font_color", dim);
             }
             else if (!AllComplete && StepOrder[_current] == id)
             {
-                label.Text = "→ " + Titles[id];
+                label.Text = "→ " + Localization.T(Titles[id]);
                 label.AddThemeColorOverride("font_color", amber);
             }
             else
             {
-                label.Text = "· " + Titles[id];
+                label.Text = "· " + Localization.T(Titles[id]);
                 label.AddThemeColorOverride("font_color", parchment);
             }
         }
@@ -295,13 +296,13 @@ public partial class TutorialDirector : Control
             _skip.Visible = !AllComplete;
             _skip.Disabled = AllComplete || (!AllComplete && MandatorySteps.Contains(StepOrder[_current]));
             _skip.TooltipText = !AllComplete && MandatorySteps.Contains(StepOrder[_current])
-                ? "This step is mandatory (dock/repair/extract): complete it for real — skipping would falsify the dive log."
-                : "Tutorial only: skips OPTIONAL steps (steer/listen/ping/salvage). Skips are logged.";
+                ? Localization.T("This step is mandatory (dock/repair/extract): complete it for real — skipping would falsify the dive log.")
+                : Localization.T("Tutorial only: skips OPTIONAL steps (steer/listen/ping/salvage). Skips are logged.");
         }
         if (AllComplete && _detail is not null)
         {
             _detail.AddThemeColorOverride("font_color", cyan);
-            _detail.Text = "Tutorial complete — well done. Extraction logged your first dive.";
+            _detail.Text = Localization.T("Tutorial complete — well done. Extraction logged your first dive.");
         }
         RefreshDetail();
     }
@@ -313,23 +314,23 @@ public partial class TutorialDirector : Control
         string text = id switch
         {
             _ when id == StepSteer =>
-                $"Hold thrust (W/S or left stick) above 20% for 3 s straight ({Math.Min(_stepTime, 3f):F1}/3.0 s).",
+                Localization.T("Hold thrust (W/S or left stick) above 20% for 3 s straight ({0:F1}/3.0 s).", Math.Min(_stepTime, 3f)),
             _ when id == StepListen =>
-                $"Drift and watch the sonar scope for 10 s — passive contacts fade in on their own ({Math.Min(_stepTime, 10f):F0}/10 s).",
+                Localization.T("Drift and watch the sonar scope for 10 s — passive contacts fade in on their own ({0:F0}/10 s).", Math.Min(_stepTime, 10f)),
             _ when id == StepPing =>
-                "Press F (right shoulder on pad) for one active ping. Leave quiet running with Z first — ping is refused while quiet.",
+                Localization.T("Press F (right shoulder on pad) for one active ping. Leave quiet running with Z first — ping is refused while quiet."),
             _ when id == StepApproach => _nearestLootMeters.HasValue
-                ? $"Close to within 30 m of the nearest salvage marker — now {_nearestLootMeters.Value:F0} m. Follow the cyan diamonds."
-                : "No salvage markers remain in this water, so this step cannot be completed here — use Skip step below.",
+                ? Localization.T("Close to within 30 m of the nearest salvage marker — now {0:F0} m. Follow the cyan diamonds.", _nearestLootMeters.Value)
+                : Localization.T("No salvage markers remain in this water, so this step cannot be completed here — use Skip step below."),
             _ when id == StepDock =>
-                "Slow to ≤2 m/s within 25 m of the amber station marker at the objective site, then press J (pad D-pad Left) to dock. Undock with J — docking freezes the hull in place.",
+                Localization.T("Slow to ≤2 m/s within 25 m of the amber station marker at the objective site, then press J (pad D-pad Left) to dock. Undock with J — docking freezes the hull in place."),
             _ when id == StepSalvage =>
-                "Press E (pad A) inside 15 m of salvage to bank it. Duplicates are rejected by the dive log, never double-counted.",
+                Localization.T("Press E (pad A) inside 15 m of salvage to bank it. Duplicates are rejected by the dive log, never double-counted."),
             _ when id == StepRepair =>
-                "Training incident opened a real severity-1 breach: press R (pad B) to weld it with 1 sealant. Flooding, pressure, and audio are live — repair for real.",
+                Localization.T("Training incident opened a real severity-1 breach: press R (pad B) to weld it with 1 sealant. Flooding, pressure, and audio are live — repair for real."),
             _ when id == StepExtract => _quotaComplete
-                ? "Quota complete — return inside the green extraction ring and press T (right stick on pad)."
-                : "Bank salvage until the top-center quota completes, then return to the green ring and press T.",
+                ? Localization.T("Quota complete — return inside the green extraction ring and press T (right stick on pad).")
+                : Localization.T("Bank salvage until the top-center quota completes, then return to the green ring and press T."),
             _ => "",
         };
         if (!string.IsNullOrEmpty(_skipNote))

@@ -168,7 +168,7 @@ internal static class ContractFlowTests
             var result = sim.TryExtract();
             TestAssert.False(result.Success, "incomplete extraction rejected");
             TestAssert.True(result.Settlement is null, "no settlement on rejection");
-            TestAssert.True(result.Reason.Contains("recover_blackbox", StringComparison.Ordinal), "reason names missing objective: " + result.Reason);
+            TestAssert.True(result.Args.Any(a => a is string s && s.Contains("recover_blackbox", StringComparison.Ordinal)), "reason names missing objective: " + result.Reason);
         });
 
         return fail;

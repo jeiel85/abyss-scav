@@ -1,4 +1,5 @@
 using AbyssScav.Domain;
+using AbyssScav.Foundation;
 using Godot;
 using SysVec = System.Numerics.Vector3;
 
@@ -93,7 +94,7 @@ public partial class SonarBuddy : Node
         if (sim.Threat > 85f && _threatCooldown <= 0f)
         {
             _threatCooldown = 20f;
-            Emit($"Threat critical at {sim.Threat:F0} — go quiet (Z) or break contact.", critical: true);
+            Emit(Localization.T("Threat critical at {0:F0} — go quiet (Z) or break contact.", sim.Threat), critical: true);
             return;
         }
         if (_sinceCallout < CalloutCooldownSeconds) return;
@@ -112,7 +113,7 @@ public partial class SonarBuddy : Node
         if (breached && !_breachWarned)
         {
             _breachWarned = true;
-            Emit("Hull breach — repair (R) or winch (X) to safe water.", critical: true);
+            Emit(Localization.T("Hull breach — repair (R) or winch (X) to safe water."), critical: true);
             return true;
         }
         if (!breached) _breachWarned = false;
@@ -124,7 +125,7 @@ public partial class SonarBuddy : Node
         if (sim.PressureMargin < 0f && !_pressureWarned)
         {
             _pressureWarned = true;
-            Emit("Pressure margin negative — ascend or ease the deeper load.", critical: false);
+            Emit(Localization.T("Pressure margin negative — ascend or ease the deeper load."), critical: false);
             return true;
         }
         if (sim.PressureMargin >= 1f) _pressureWarned = false; // re-arm in safe range.
@@ -136,7 +137,7 @@ public partial class SonarBuddy : Node
         if (sim.Noise > 80f && !_noiseWarned)
         {
             _noiseWarned = true;
-            Emit($"Noise {sim.Noise:F0} — loud hull, contacts closing. Ease thrust or go quiet.", critical: false);
+            Emit(Localization.T("Noise {0:F0} — loud hull, contacts closing. Ease thrust or go quiet.", sim.Noise), critical: false);
             return true;
         }
         if (sim.Noise <= 75f) _noiseWarned = false; // re-arm in safe range.
@@ -149,7 +150,7 @@ public partial class SonarBuddy : Node
         {
             if (c.Class != SonarClass.Biological || c.Confidence < 0.5f) continue;
             if (!_announcedContacts.Add(c.ContactId)) continue;
-            Emit($"New hostile contact, confidence {(int)Math.Round(c.Confidence * 100f)} percent.", critical: false);
+            Emit(Localization.T("New hostile contact, confidence {0} percent.", (int)Math.Round(c.Confidence * 100f)), critical: false);
             return true;
         }
         return false;
@@ -170,7 +171,7 @@ public partial class SonarBuddy : Node
         if (nearest is null) return false;
         _closeCooldowns[nearest.Id] = 30f;
         var dir = (ToG(nearest.Position) - shipPos).Normalized();
-        Emit($"Contact close aboard, {best:F0} meters, {BearingWord(fwd, dir)}.", critical: false);
+        Emit(Localization.T("Contact close aboard, {0:F0} meters, {1}.", best, Localization.T(BearingWord(fwd, dir))), critical: false);
         return true;
     }
 
@@ -206,7 +207,7 @@ public partial class SonarBuddy : Node
         }
         if (bestBearing == "") return false;
         _obstacleCooldown = 20f;
-        Emit($"Obstacle ahead, {best:F0} meters, {bestBearing}.", critical: false);
+        Emit(Localization.T("Obstacle ahead, {0:F0} meters, {1}.", best, Localization.T(bestBearing)), critical: false);
         return true;
     }
 
@@ -215,7 +216,7 @@ public partial class SonarBuddy : Node
         if (sim.WinchUsed && !_winchSeen)
         {
             _winchSeen = true;
-            Emit("Winch fired — back at last safe water. Winch spent for this run.", critical: false);
+            Emit(Localization.T("Winch fired — back at last safe water. Winch spent for this run."), critical: false);
             return true;
         }
         return false;
