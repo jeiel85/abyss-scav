@@ -125,7 +125,11 @@ public sealed class LocalizationService
         return fallback;
     }
 
-    /// <summary>Translates a key and formats it with <see cref="string.Format"/>; formatting applies even when the key is missing.</summary>
+    /// <summary>
+    /// Translates a key and formats it with <see cref="string.Format"/>; formatting applies even when the key is missing.
+    /// NOTE: a single <see cref="string"/> argument binds to <see cref="T(string, string)"/> (no formatting), so pass
+    /// <c>(object)</c> to force this overload: <c>T("Ping refused: {0}", (object)reason)</c>.
+    /// </summary>
     public string T(string key, params object[] args) => string.Format(T(key), args);
 
     private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> LoadEmbeddedTables()

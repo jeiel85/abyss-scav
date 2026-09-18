@@ -34,6 +34,10 @@ public static class Localization
     /// <summary>Translates a key, returning <paramref name="fallback"/> when no table has it.</summary>
     public static string T(string key, string fallback) => _service?.T(key, fallback) ?? fallback;
 
-    /// <summary>Translates a key and formats it with <see cref="string.Format"/>.</summary>
+    /// <summary>
+    /// Translates a key and formats it with <see cref="string.Format"/>.
+    /// NOTE: a single <see cref="string"/> argument binds to <see cref="T(string, string)"/> (no formatting), so pass
+    /// <c>(object)</c> to force this overload: <c>T("Ping refused: {0}", (object)reason)</c>.
+    /// </summary>
     public static string T(string key, params object[] args) => _service?.T(key, args) ?? string.Format(key, args);
 }

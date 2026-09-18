@@ -1,4 +1,5 @@
 using AbyssScav.Domain;
+using AbyssScav.Foundation;
 using AbyssScav.Presentation;
 using Godot;
 
@@ -14,6 +15,10 @@ public static class RunSmoke
 {
     public static void Execute(Node host, string[] args)
     {
+        // Smoke asserts English UI text (e.g. "Research data:"); localization
+        // coverage is verified separately by the key-coverage check. Pin the
+        // language so a ko settings.cfg can never make the harness fail.
+        Localization.SetLanguage("en");
         var log = new List<string>();
         var ok = true;
         void Check(bool cond, string name, string detail = "")
