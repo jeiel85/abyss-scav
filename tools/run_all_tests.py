@@ -54,6 +54,10 @@ def main():
     if not run_command([sys.executable, "tools/validate_design_package.py"], "Design Package Validation"):
         failures += 1
 
+    # 3.5 i18n coverage validation (ko.json keys + format placeholder integrity)
+    if not run_command([sys.executable, "tools/validate_i18n_coverage.py"], "i18n Coverage Validation"):
+        failures += 1
+
     # 4. In-engine headless test (if Godot Mono is present)
     godot_bin = find_godot_mono()
     if godot_bin:
