@@ -32,10 +32,10 @@ internal static class EventTests
             TestAssert.True(sim.RecentEvents.Any(e => e.Kind == "event.ended"), "event expiry raised");
         });
 
-        Case("all five scheduled event kinds reachable across seeds", () =>
+        Case("all nine scheduled event kinds reachable across seeds", () =>
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var seed in new ulong[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 })
+            foreach (var seed in new ulong[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18 })
             {
                 var world = DomainSetup.World(catalog, seed, "biome.shelf_graveyard", "contract.salvage_quota");
                 var sim = DomainSetup.Sim(catalog, world);
@@ -43,21 +43,26 @@ internal static class EventTests
                 foreach (var e in sim.RecentEvents)
                     if (e.Kind.StartsWith("event.", StringComparison.Ordinal)) seen.Add(e.Kind);
             }
-            foreach (var kind in new[] { "event.acoustic_disturbance", "event.facility_alarm", "event.anomaly", "event.current_shift", "event.migration" })
+            foreach (var kind in new[]
+            {
+                "event.acoustic_disturbance", "event.facility_alarm", "event.anomaly",
+                "event.current_shift", "event.migration", "event.collapsing_trench",
+                "event.false_distress_beacon", "event.relic_resonance", "event.extraction_ambush",
+            })
                 TestAssert.True(seen.Contains(kind), $"{kind} reachable");
         });
 
         Case("event effects apply while active and expire", () =>
         {
             var verified = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var seed in new ulong[] { 41, 42, 43, 44, 45, 46, 47, 48 })
+            foreach (var seed in new ulong[] { 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64 })
             {
                 var world = DomainSetup.World(catalog, seed, "biome.shelf_graveyard", "contract.salvage_quota");
                 var sim = DomainSetup.Sim(catalog, world);
                 var baselinePassive = sim.PassiveSonarRangeMeters;
                 var initialPositions = sim.CreatureStates.Select(c => c.Position).ToList();
                 var guard = 0;
-                while (guard++ < 1400 && sim.Phase == RunPhase.Active && verified.Count < 5)
+                while (guard++ < 1400 && sim.Phase == RunPhase.Active && verified.Count < 9)
                 {
                     sim.Tick(0.5f, sim.ShipPosition, DomainSetup.Idle);
                     var kind = sim.ActiveMajorEvent;
@@ -79,6 +84,40 @@ internal static class EventTests
                                 if (pulse.Success)
                                     TestAssert.True(pulse.Contacts.All(c => c.Confidence <= 0.4f + 0.001f), "anomaly caps confidence at 0.4");
                                 break;
+                            case "event.collapsing_trench":
+                                var evt = sim.RecentEvents.FirstOrDefault(e => e.Kind == "event.collapsing_trench");
+                                if (evt?.Args.Length > 0 && evt.Args[0] is string nodeId)
+                                {
+                                    var node = world.GetNode(nodeId);
+                                    if (node is not null)
+                                    {
+                                        var before = sim.HullIntegrity;
+                                        DomainSetup.Teleport(sim, node.Position);
+                                        sim.Tick(0.5f, node.Position, DomainSetup.Idle);
+                                        TestAssert.True(sim.HullIntegrity < before, "debris damages hull in the collapse zone");
+                                    }
+                                }
+                                break;
+                            case "event.false_distress_beacon":
+                                TestAssert.True(sim.Contacts.Any(c => c.ContactId == "contact.beacon.false"), "false beacon contact on sonar");
+                                var beacon = sim.Contacts.FirstOrDefault(c => c.ContactId == "contact.beacon.false");
+                                if (beacon is not null)
+                                {
+                                    DomainSetup.Teleport(sim, beacon.ApproxPosition);
+                                    sim.Tick(0.5f, beacon.ApproxPosition, DomainSetup.Idle);
+                                    TestAssert.True(sim.RecentEvents.Any(e => e.Kind == "event.false_beacon_ambush"), "ambush triggered on approach");
+                                }
+                                break;
+                            case "event.relic_resonance":
+                                var noiseBefore = sim.Noise;
+                                sim.Tick(0.5f, sim.ShipPosition, DomainSetup.Idle);
+                                TestAssert.True(sim.Noise > noiseBefore + 10f, $"resonance raises noise ({noiseBefore:F0} -> {sim.Noise:F0})");
+                                break;
+                            case "event.extraction_ambush":
+                                var extractionPos = world.GetNode(world.ExtractionNodeId).Position;
+                                TestAssert.True(sim.CreatureStates.Any(c => c.State is CreatureState.Investigate or CreatureState.Stalk &&
+                                    Vector3.Distance(c.Position, extractionPos) < 200f), "creatures waiting near extraction");
+                                break;
                             case "event.facility_alarm":
                                 break; // hear multiplier; presence verified
                         }
@@ -94,7 +133,12 @@ internal static class EventTests
                     }
                 }
             }
-            foreach (var kind in new[] { "event.acoustic_disturbance", "event.facility_alarm", "event.anomaly", "event.current_shift", "event.migration" })
+            foreach (var kind in new[]
+            {
+                "event.acoustic_disturbance", "event.facility_alarm", "event.anomaly",
+                "event.current_shift", "event.migration", "event.collapsing_trench",
+                "event.false_distress_beacon", "event.relic_resonance", "event.extraction_ambush",
+            })
                 TestAssert.True(verified.Contains(kind), $"{kind} effect verified");
         });
 

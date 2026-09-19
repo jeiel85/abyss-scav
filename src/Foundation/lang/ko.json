@@ -571,5 +571,16 @@
   "Buoy refused: {0}": "부이 거부: {0}",
   "Emergency buoy fired — secured salvage recovery boosted on failure.": "비상 부이 발사 — 실패 시 확보 화물 회수율 상승.",
   "W/S surge · A/D sway · Space/Ctrl heave · Arrows yaw/pitch · Shift boost · Z quiet · F ping · E salvage · V survey · G service · R repair · J dock/undock · H drill hold · X winch · B buoy · 1-8 consumables · T extract · Esc pause": "W/S 전후 · A/D 좌우 · Space/Ctrl 상하 · 방향키 요/피치 · Shift 부스트 · Z 정숙 · F 핑 · E 인양 · V 조사 · G 서비스 · R 수리 · J 도킹/언도킹 · H 드릴 홀드 · X 윈치 · B 부이 · 1-8 소모품 · T 추출 · Esc 일시정지",
-  "Consumables (optional) — one charge each, spent on use (1-8 keys)": "소모품 (선택) — 각 1회분, 사용 시 소모 (1-8 키)"
+  "Consumables (optional) — one charge each, spent on use (1-8 keys)": "소모품 (선택) — 각 1회분, 사용 시 소모 (1-8 키)",
+  "Collapsing trench: debris zone for 30 s.": "참호 붕괴: 30초간 잔해 구역이 생성됩니다.",
+  "Collapsing trench at {0}: debris zone, avoid.": "{0}에서 참호 붕괴: 잔해 구역, 피하세요.",
+  "False distress beacon: approaching it triggers an ambush.": "가짜 조난 비콘: 접근하면 매복이 발동됩니다.",
+  "Relic resonance: noise +30, creatures converge for 30 s.": "유물 공명: 30초간 소음 +30, 크리처가 모여듭니다.",
+  "Extraction ambush: creatures waiting at the extraction zone.": "추출 매복: 추출 구역에 크리처가 대기합니다.",
+  "Debris strike: hull integrity {0:F0}.": "잔해 충돌: 선체 내구도 {0:F0}.",
+  "False beacon ambush: creatures converging!": "가짜 비콘 매복: 크리처가 접근합니다!",
+  "COLLAPSING TRENCH — debris zone, avoid ({0:F0}s)": "참호 붕괴 — 잔해 구역, 회피 ({0:F0}초)",
+  "FALSE DISTRESS BEACON — trap ({0:F0}s)": "가짜 조난 비콘 — 함정 ({0:F0}초)",
+  "RELIC RESONANCE — noise +30, creatures converge ({0:F0}s)": "유물 공명 — 소음 +30, 크리처 접근 ({0:F0}초)",
+  "EXTRACTION AMBUSH — creatures at extraction ({0:F0}s)": "추출 매복 — 추출 구역에 크리처 ({0:F0}초)"
 }

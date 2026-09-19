@@ -461,6 +461,10 @@ public partial class RunController : Node3D
             "event.facility_alarm" => Localization.T("FACILITY ALARM — creatures converging ({0:F0}s)", _sim.MajorEventRemaining),
             "event.anomaly" => Localization.T("SONAR ANOMALY — contacts unreliable ({0:F0}s)", _sim.MajorEventRemaining),
             "event.current_shift" => Localization.T("CURRENT SHIFT — engine draw +15 PU, noise +10 ({0:F0}s)", _sim.MajorEventRemaining),
+            "event.collapsing_trench" => Localization.T("COLLAPSING TRENCH — debris zone, avoid ({0:F0}s)", _sim.MajorEventRemaining),
+            "event.false_distress_beacon" => Localization.T("FALSE DISTRESS BEACON — trap ({0:F0}s)", _sim.MajorEventRemaining),
+            "event.relic_resonance" => Localization.T("RELIC RESONANCE — noise +30, creatures converge ({0:F0}s)", _sim.MajorEventRemaining),
+            "event.extraction_ambush" => Localization.T("EXTRACTION AMBUSH — creatures at extraction ({0:F0}s)", _sim.MajorEventRemaining),
             _ => "",
         };
     }

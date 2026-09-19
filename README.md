@@ -87,7 +87,7 @@ Short version:
 | Frames | Skiff (agile) · Mule (heavy cargo) · Warden (armored) |
 | Modules with effects | WhisperPulse · PassiveBooster · QuietProp · ReinforcedRib · PressureSkin · SalvageMagnet · EmergencyBuoy |
 | Consumables | Sealant Canister · Battery Pack · Hull Patch · Acoustic Decoy · Pressure Flare · Sonar Buoy · Stim · Antifreeze |
-| Major events | Acoustic Disturbance · Facility Alarm · Anomaly · Current Shift · Migration |
+| Major events | Acoustic Disturbance · Facility Alarm · Anomaly · Current Shift · Migration · Collapsing Trench · False Distress Beacon · Relic Resonance · Extraction Ambush |
 | Difficulties | Casual Dive · Standard · Blackwater · Custom |
 | Creatures | 8 regular + 3 apex (Needle Eel, Bell Maw, Glass Ray, Silt Stalker, Lampreech, Chorus Colony, Hull Grazer, Warden Crab; The Long Choir, Pale Leviathan, Trench Mother) |
 

@@ -316,6 +316,9 @@ public sealed class RunSimulation
     private float _majorEventTimer;
     private string? _majorEventKind;
     private float _majorEventRemaining;
+    private string? _collapseNodeId;
+    private Vector3? _falseBeaconPosition;
+    private bool _falseBeaconTriggered;
 
     private RunSimulation(
         GeneratedWorld world, ContentCatalog catalog, DifficultyDef difficulty,
@@ -782,6 +785,7 @@ public sealed class RunSimulation
         if (_drillLootSpawnId is not null) target += 18f; // drill bit + cuttings pump.
         if (_modifierIds.Contains("modifier.severe_current")) target += 8f;
         if (_majorEventKind == "event.current_shift") target += 10f;
+        if (_majorEventKind == "event.relic_resonance") target += 30f;
         target = Math.Clamp(target, 0f, 100f);
         var slew = 25f * dt;
         Noise = Math.Abs(target - Noise) <= slew ? target : Noise + Math.Sign(target - Noise) * slew;
@@ -1475,7 +1479,18 @@ public sealed class RunSimulation
             {
                 _majorEventKind = null;
                 _majorEventRemaining = 0f;
+                _collapseNodeId = null;
+                if (_falseBeaconPosition is not null)
+                {
+                    _contacts.Remove("contact.beacon.false");
+                    _falseBeaconPosition = null;
+                    _falseBeaconTriggered = false;
+                }
                 Raise("event.ended", "Environmental conditions normalize.");
+            }
+            else
+            {
+                UpdateActiveEvent(dt);
             }
             return;
         }
@@ -1484,16 +1499,65 @@ public sealed class RunSimulation
         TriggerMajorEvent();
     }
 
+    /// <summary>Per-tick effects of the live major event (debris damage, beacon ambush).</summary>
+    private void UpdateActiveEvent(float dt)
+    {
+        if (_majorEventKind == "event.collapsing_trench" && _collapseNodeId is not null)
+        {
+            var node = _world.GetNode(_collapseNodeId);
+            if (node is not null)
+            {
+                var dist = Vector3.Distance(ShipPosition, node.Position);
+                if (dist < 50f)
+                {
+                    HullIntegrity = Math.Max(0f, HullIntegrity - 4f * dt);
+                    _noiseSpike += 2f;
+                    Raise("event.debris", "Debris strike: hull integrity {0:F0}.", HullIntegrity);
+                }
+                foreach (var creature in _creatures)
+                {
+                    if (Vector3.Distance(creature.Position, node.Position) < 80f)
+                    {
+                        creature.Position = node.Position + new Vector3(
+                            _eventRng.NextFloat(-120f, 120f), _eventRng.NextFloat(-20f, 20f), _eventRng.NextFloat(-120f, 120f));
+                        creature.State = CreatureState.Dormant;
+                        creature.StateTime = 0f;
+                    }
+                }
+            }
+        }
+        else if (_majorEventKind == "event.false_distress_beacon" && _falseBeaconPosition is not null && !_falseBeaconTriggered)
+        {
+            if (Vector3.Distance(ShipPosition, _falseBeaconPosition.Value) < 50f)
+            {
+                _falseBeaconTriggered = true;
+                _contacts.Remove("contact.beacon.false");
+                foreach (var creature in _creatures)
+                {
+                    if (Vector3.Distance(creature.Position, ShipPosition) < 400f)
+                    {
+                        creature.State = CreatureState.Investigate;
+                        creature.StateTime = 0f;
+                    }
+                }
+                Raise("event.false_beacon_ambush", "False beacon ambush: creatures converging!");
+            }
+        }
+    }
+
     private void TriggerMajorEvent()
     {
-        var roll = _eventRng.NextFloat(0f, 1f);
-        var kind = roll switch
+        var kind = _eventRng.NextInt(0, 9) switch
         {
-            < 0.2f => "event.acoustic_disturbance",
-            < 0.4f => "event.facility_alarm",
-            < 0.6f => "event.anomaly",
-            < 0.8f => "event.current_shift",
-            _ => "event.migration",
+            0 => "event.acoustic_disturbance",
+            1 => "event.facility_alarm",
+            2 => "event.anomaly",
+            3 => "event.current_shift",
+            4 => "event.migration",
+            5 => "event.collapsing_trench",
+            6 => "event.false_distress_beacon",
+            7 => "event.relic_resonance",
+            _ => "event.extraction_ambush",
         };
         switch (kind)
         {
@@ -1516,6 +1580,20 @@ public sealed class RunSimulation
                 _majorEventKind = kind;
                 _majorEventRemaining = 25f;
                 Raise("event.current_shift", "Current shift: engine draw +15 PU, noise +10 for 25 s.");
+                break;
+            case "event.collapsing_trench":
+                TriggerCollapsingTrench();
+                break;
+            case "event.false_distress_beacon":
+                TriggerFalseBeacon();
+                break;
+            case "event.relic_resonance":
+                _majorEventKind = kind;
+                _majorEventRemaining = 30f;
+                Raise("event.relic_resonance", "Relic resonance: noise +30, creatures converge for 30 s.");
+                break;
+            case "event.extraction_ambush":
+                TriggerExtractionAmbush();
                 break;
             default:
                 TriggerMigration();
@@ -1541,6 +1619,73 @@ public sealed class RunSimulation
             moved++;
         }
         Raise("event.migration", "Creature migration: {0} contacts repositioned.", moved);
+    }
+
+    /// <summary>
+    /// Collapsing trench: a random route node becomes a debris zone for 30 s.
+    /// The ship inside 50 m takes hull damage; creatures inside 80 m are displaced.
+    /// </summary>
+    private void TriggerCollapsingTrench()
+    {
+        var routeNodes = _world.Nodes.Where(n => n.Kind is WorldNodeKind.Route or WorldNodeKind.Objective).ToList();
+        if (routeNodes.Count == 0)
+        {
+            _majorEventKind = "event.collapsing_trench";
+            _majorEventRemaining = 30f;
+            Raise("event.collapsing_trench", "Collapsing trench: debris zone for 30 s.");
+            return;
+        }
+        _collapseNodeId = routeNodes[_eventRng.NextInt(0, routeNodes.Count)].Id;
+        _majorEventKind = "event.collapsing_trench";
+        _majorEventRemaining = 30f;
+        Raise("event.collapsing_trench", "Collapsing trench at {0}: debris zone, avoid.", _collapseNodeId);
+    }
+
+    /// <summary>
+    /// False distress beacon: a convincing structure contact appears on sonar.
+    /// Approaching within 50 m springs an ambush (creatures converge on the ship).
+    /// </summary>
+    private void TriggerFalseBeacon()
+    {
+        var bearing = _eventRng.NextFloat(0f, MathF.PI * 2f);
+        var dist = _eventRng.NextFloat(150f, 350f);
+        _falseBeaconPosition = ShipPosition + new Vector3(MathF.Cos(bearing) * dist, _eventRng.NextFloat(-20f, 20f), MathF.Sin(bearing) * dist);
+        _falseBeaconTriggered = false;
+        var beaconPos = _falseBeaconPosition.Value;
+        _contacts["contact.beacon.false"] = new ContactRuntime("contact.beacon.false", SonarClass.Structure, beaconPos)
+        {
+            Confidence = 0.9f,
+            RangeMeters = dist,
+            DisplayPosition = beaconPos,
+            LastSeenSeconds = ElapsedSeconds,
+            Pings = 1,
+        };
+        _majorEventKind = "event.false_distress_beacon";
+        _majorEventRemaining = 30f;
+        Raise("event.false_distress_beacon", "False distress beacon: approaching it triggers an ambush.");
+    }
+
+    /// <summary>
+    /// Extraction ambush: up to two non-engaged creatures reposition near the
+    /// extraction node and investigate; creatures near extraction are drawn in.
+    /// </summary>
+    private void TriggerExtractionAmbush()
+    {
+        var extraction = _world.GetNode(_world.ExtractionNodeId).Position;
+        var moved = 0;
+        for (var i = 0; i < _creatures.Count && moved < 2; i++)
+        {
+            var creature = _creatures[_eventRng.NextInt(0, _creatures.Count)];
+            if (creature.State is CreatureState.Attack or CreatureState.Hunt) continue;
+            creature.Position = extraction + new Vector3(
+                _eventRng.NextFloat(-60f, 60f), _eventRng.NextFloat(-15f, 15f), _eventRng.NextFloat(-60f, 60f));
+            creature.State = CreatureState.Investigate;
+            creature.StateTime = 0f;
+            moved++;
+        }
+        _majorEventKind = "event.extraction_ambush";
+        _majorEventRemaining = 30f;
+        Raise("event.extraction_ambush", "Extraction ambush: creatures waiting at the extraction zone.");
     }
 
     /// <summary>
@@ -1684,6 +1829,11 @@ public sealed class RunSimulation
                 case CreatureState.Dormant:
                     if (dist < hear * creature.Def.Aggression * nesting)
                         SetState(creature, CreatureState.Investigate, "investigating noise");
+                    else if (_majorEventKind == "event.relic_resonance" && dist < 400f)
+                        SetState(creature, CreatureState.Investigate, "relic resonance");
+                    else if (_majorEventKind == "event.extraction_ambush" &&
+                             Vector3.Distance(creature.Position, _world.GetNode(_world.ExtractionNodeId).Position) < 150f)
+                        SetState(creature, CreatureState.Investigate, "extraction ambush");
                     break;
                 case CreatureState.Investigate:
                     creature.Position += dir * creature.Def.SpeedMetersPerSecond * 0.6f * dt;
