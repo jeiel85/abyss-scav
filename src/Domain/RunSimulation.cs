@@ -518,7 +518,7 @@ public sealed class RunSimulation
     /// Presentation must apply this to physical thrust; the quiet-running cap
     /// still applies on top.
     /// </summary>
-    public float EngineThrustMultiplier => _loadout.EngineThrustMult;
+    public float EngineThrustMultiplier => _loadout.EngineThrustMult * (HullIntegrity < MaxHull * 0.3f ? _loadout.EmergencyThrustMult : 1f);
 
     /// <summary>Available power supply in PU (after reactor dips).</summary>
     public float PowerSupply { get; private set; }
@@ -652,11 +652,11 @@ public sealed class RunSimulation
     /// <summary>Drill elapsed seconds, bounded 0..<see cref="DomainConstants.DrillDurationSeconds"/>.</summary>
     public float DrillElapsedSeconds => _drillElapsedSeconds;
 
-    /// <summary>Drill duration in seconds (bounded 8 s).</summary>
-    public float DrillDurationSeconds => DomainConstants.DrillDurationSeconds;
+    /// <summary>Drill duration in seconds (bounded 8 s, drill arm shortens it).</summary>
+    public float DrillDurationSeconds => DomainConstants.DrillDurationSeconds * _loadout.DrillDurationMult;
 
     /// <summary>Drill seconds remaining.</summary>
-    public float DrillRemainingSeconds => Math.Max(0f, DomainConstants.DrillDurationSeconds - _drillElapsedSeconds);
+    public float DrillRemainingSeconds => Math.Max(0f, DrillDurationSeconds - _drillElapsedSeconds);
 
     /// <summary>Actual drill reach in meters (manipulator reach + 10 m station assist).</summary>
     public float DrillRangeMeters => SalvageRangeMeters + DomainConstants.DrillExtraReachMeters;
@@ -840,11 +840,15 @@ public sealed class RunSimulation
             if (_severity[i] > 0)
             {
                 var rate = _severity[i] switch { 1 => 1.5f, 2 => 4f, _ => 9f };
-                _flood[i] = Math.Min(100f, _flood[i] + rate * dt);
+                _flood[i] = Math.Min(100f, _flood[i] + rate * _loadout.FloodFillMult * dt);
             }
             if (_flood[i] > 0f && PowerShedLevel < 2)
-                _flood[i] = Math.Max(0f, _flood[i] - 3f * dt);
+                _flood[i] = Math.Max(0f, _flood[i] - (3f + _loadout.PumpRateBonus) * dt);
         }
+
+        // Repair drone: passive hull regen while no compartment is flooding.
+        if (_loadout.HullRegenPerSecond > 0f && floodedCount == 0)
+            HullIntegrity = Math.Min(MaxHull, HullIntegrity + _loadout.HullRegenPerSecond * dt);
 
         PulseCooldownRemaining = Math.Max(0f, PulseCooldownRemaining - dt);
 
@@ -909,7 +913,7 @@ public sealed class RunSimulation
         _hasPulsed = true;
 
         var fresh = new HashSet<string>(StringComparer.Ordinal);
-        void Upsert(string id, SonarClass cls, Vector3 truePos, float dist)
+        void Upsert(string id, SonarClass cls, Vector3 truePos, float dist, float confidenceBonus = 0f)
         {
             fresh.Add(id);
             if (!_contacts.TryGetValue(id, out var c))
@@ -921,7 +925,7 @@ public sealed class RunSimulation
             c.TruePosition = truePos;
             c.RangeMeters = dist;
             c.LastSeenSeconds = ElapsedSeconds;
-            c.Confidence = Math.Min(1f, c.Confidence + (c.Pings == 0 ? 0.3f : 0.2f));
+            c.Confidence = Math.Min(1f, c.Confidence + (c.Pings == 0 ? 0.3f : 0.2f) + confidenceBonus);
             if (moved && !c.Triangulated && c.Pings > 0)
             {
                 c.Triangulated = true;
@@ -943,26 +947,26 @@ public sealed class RunSimulation
             if (dist > range) continue;
             var cls = node.Kind is WorldNodeKind.Objective || node.Kind is WorldNodeKind.Extraction || !string.IsNullOrEmpty(node.ServiceId)
                 ? SonarClass.Structure : SonarClass.Terrain;
-            Upsert("contact.node." + node.Id, cls, node.Position, dist);
+            Upsert("contact.node." + node.Id, cls, node.Position, dist, _loadout.PulseConfidenceBonus);
         }
         foreach (var loot in _world.LootSpawns)
         {
             if (_collectedLoot.Contains(loot.SpawnId)) continue;
             var dist = Vector3.Distance(loot.Position, ShipPosition);
             if (dist > range) continue;
-            Upsert("contact.loot." + loot.SpawnId, SonarClass.Salvage, loot.Position, dist);
+            Upsert("contact.loot." + loot.SpawnId, SonarClass.Salvage, loot.Position, dist, _loadout.PulseConfidenceBonus);
         }
         foreach (var creature in _creatures)
         {
             var dist = Vector3.Distance(creature.Position, ShipPosition);
             if (dist > range * 0.9f) continue;
-            Upsert("contact.bio." + creature.Id, SonarClass.Biological, creature.Position, dist);
+            Upsert("contact.bio." + creature.Id, SonarClass.Biological, creature.Position, dist, _loadout.PulseConfidenceBonus + _loadout.BioConfidenceBonus);
             creature.SonarExposedSeconds = 15f;
         }
 
         // Ghosts: high threat breeds false returns; chorus colonies sing along.
         var ghosts = 0;
-        if (Threat > 60f) ghosts++;
+        if (Threat > 60f + _loadout.GhostThresholdBonus) ghosts++;
         foreach (var creature in _creatures)
         {
             if (creature.Def.Id == "creature.chorus_colony" &&
@@ -1448,8 +1452,8 @@ public sealed class RunSimulation
             Raise("drill.cancelled", "Drill cancelled: out of range, no salvage banked.");
             return;
         }
-        _drillElapsedSeconds = Math.Min(DomainConstants.DrillDurationSeconds, _drillElapsedSeconds + dt);
-        if (_drillElapsedSeconds < DomainConstants.DrillDurationSeconds) return;
+        _drillElapsedSeconds = Math.Min(DrillDurationSeconds, _drillElapsedSeconds + dt);
+        if (_drillElapsedSeconds < DrillDurationSeconds) return;
         // Full duration served: re-validate capacity/distance like a normal pickup.
         if (_cargo.Count >= _frame.CargoSlots || CargoUsedMassKg + loot.MassKg > _frame.CargoMaxMassKg)
         {
@@ -1878,7 +1882,7 @@ public sealed class RunSimulation
 
     private void Strike(CreatureRuntime creature)
     {
-        var damage = creature.Def.AttackDamage;
+        var damage = creature.Def.AttackDamage * _loadout.CreatureDamageMult;
         HullIntegrity = Math.Max(0f, HullIntegrity - damage);
         _noiseSpike += 8f;
         Raise("creature.strike", "{0} struck for {1:F0} damage.", creature.Def.DisplayName, damage);

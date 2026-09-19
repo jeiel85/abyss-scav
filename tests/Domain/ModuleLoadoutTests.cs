@@ -115,6 +115,158 @@ internal static class ModuleLoadoutTests
             TestAssert.True(banked.Success, "magnet banks 20m loot: " + banked.Reason);
         });
 
+        Case("wide array widens pulse reach, raises threat, quickens cooldown", () =>
+        {
+            var world = DomainSetup.World(catalog, 111UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var wide = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.WideArray });
+            TestAssert.Equal(450f * 1.3f, wide.ActivePulseRangeMeters, "pulse range x1.3");
+            var stockPulse = stock.Pulse();
+            var widePulse = wide.Pulse();
+            TestAssert.True(stockPulse.Success && widePulse.Success, "both pulses fire");
+            TestAssert.Equal(6f * 1.2f, widePulse.ThreatAdded, "wide threat x1.2");
+            TestAssert.Equal(6.5f, widePulse.CooldownSeconds, "wide cooldown 6.5s");
+        });
+
+        Case("focus beam sharpens pulse confidence and quickens cooldown", () =>
+        {
+            var world = DomainSetup.World(catalog, 112UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var focused = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.FocusBeam });
+            var stockPulse = stock.Pulse();
+            var focusPulse = focused.Pulse();
+            TestAssert.True(stockPulse.Success && focusPulse.Success, "both pulses fire");
+            TestAssert.Equal(6f, focusPulse.CooldownSeconds, "focus cooldown 6.0s");
+            var far = stockPulse.Contacts.First(c => c.Confidence <= 0.31f);
+            var same = focusPulse.Contacts.First(c => c.ContactId == far.ContactId);
+            TestAssert.True(Math.Abs((same.Confidence - far.Confidence) - 0.1f) < 0.001f,
+                $"focus adds +0.1 confidence ({far.Confidence:F2} -> {same.Confidence:F2})");
+        });
+
+        Case("resonance classifier sharpens biological reads, slows cooldown", () =>
+        {
+            var world = DomainSetup.World(catalog, 113UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var classified = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.ResonanceClassifier });
+            var creaturePos = stock.CreatureStates[0].Position;
+            DomainSetup.Teleport(stock, creaturePos);
+            DomainSetup.Teleport(classified, creaturePos);
+            var stockPulse = stock.Pulse();
+            var classPulse = classified.Pulse();
+            TestAssert.True(stockPulse.Success && classPulse.Success, "both pulses fire");
+            TestAssert.Equal(9f, classPulse.CooldownSeconds, "classifier cooldown 9.0s");
+            var bio = stockPulse.Contacts.First(c => c.Class == SonarClass.Biological);
+            var same = classPulse.Contacts.First(c => c.ContactId == bio.ContactId);
+            TestAssert.True(Math.Abs((same.Confidence - bio.Confidence) - 0.15f) < 0.001f,
+                $"classifier adds +0.15 bio confidence ({bio.Confidence:F2} -> {same.Confidence:F2})");
+        });
+
+        Case("ghost filter raises the false-contact threat threshold", () =>
+        {
+            var fx = ModuleLoadout.Resolve(new[] { ModuleLoadout.GhostFilter });
+            TestAssert.Equal(20f, fx.GhostThresholdBonus, "ghost threshold +20");
+            TestAssert.Equal(1f, fx.PulseRangeMult, "no pulse range change");
+        });
+
+        Case("overdrive thruster boosts thrust and noise together", () =>
+        {
+            var world = DomainSetup.World(catalog, 114UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var over = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.OverdriveThruster });
+            TestAssert.Equal(1.45f, over.EngineThrustMultiplier, "thrust x1.45");
+            TestAssert.Equal(1.45f, over.EngineNoiseMultiplier, "noise x1.45");
+            for (var i = 0; i < 40; i++)
+            {
+                stock.Tick(0.5f, stock.ShipPosition, new ShipControlInput(1f, false, false));
+                over.Tick(0.5f, over.ShipPosition, new ShipControlInput(1f, false, false));
+            }
+            TestAssert.True(over.Noise > stock.Noise + 10f, $"overdrive {over.Noise:F1} vs stock {stock.Noise:F1}");
+        });
+
+        Case("cavitation dampener quiets without thrust loss", () =>
+        {
+            var world = DomainSetup.World(catalog, 115UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var dampened = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.CavitationDampener });
+            TestAssert.Equal(0.65f, dampened.EngineNoiseMultiplier, "noise x0.65");
+            TestAssert.Equal(1f, dampened.EngineThrustMultiplier, "thrust untouched");
+            for (var i = 0; i < 40; i++)
+            {
+                stock.Tick(0.5f, stock.ShipPosition, new ShipControlInput(1f, false, false));
+                dampened.Tick(0.5f, dampened.ShipPosition, new ShipControlInput(1f, false, false));
+            }
+            TestAssert.True(dampened.Noise < stock.Noise - 10f, $"dampened {dampened.Noise:F1} vs stock {stock.Noise:F1}");
+        });
+
+        Case("emergency reverse bursts thrust below 30% hull", () =>
+        {
+            var fx = ModuleLoadout.Resolve(new[] { ModuleLoadout.EmergencyReverse });
+            TestAssert.Equal(1.5f, fx.EmergencyThrustMult, "emergency thrust x1.5");
+            var world = DomainSetup.World(catalog, 116UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var sim = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.EmergencyReverse });
+            TestAssert.Equal(1f, sim.EngineThrustMultiplier, "full hull: no burst");
+        });
+
+        Case("abyss plating adds rating and hull together", () =>
+        {
+            var world = DomainSetup.World(catalog, 117UL, "biome.black_trench", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var plated = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.AbyssPlating });
+            TestAssert.Equal(stock.MaxHull + 100f, plated.MaxHull, "max hull +100");
+            TestAssert.Equal(40f, plated.HullRatingEffective - stock.HullRatingEffective, "rating +40");
+        });
+
+        Case("flood bulkhead halves breach fill rate", () =>
+        {
+            var fx = ModuleLoadout.Resolve(new[] { ModuleLoadout.FloodBulkhead });
+            TestAssert.Equal(0.5f, fx.FloodFillMult, "fill rate x0.5");
+            TestAssert.Equal(0f, fx.PumpRateBonus, "pump untouched");
+        });
+
+        Case("self-sealing foam doubles pump rate", () =>
+        {
+            var fx = ModuleLoadout.Resolve(new[] { ModuleLoadout.SelfSealingFoam });
+            TestAssert.Equal(3f, fx.PumpRateBonus, "pump +3/s (3 -> 6)");
+            TestAssert.Equal(1f, fx.FloodFillMult, "fill untouched");
+        });
+
+        Case("shock buffer softens creature strikes", () =>
+        {
+            var fx = ModuleLoadout.Resolve(new[] { ModuleLoadout.ShockBuffer });
+            TestAssert.Equal(0.7f, fx.CreatureDamageMult, "strike damage x0.7");
+        });
+
+        Case("drill arm shortens extraction cuts", () =>
+        {
+            var world = DomainSetup.World(catalog, 118UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var armed = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.DrillArm });
+            TestAssert.Equal(8f, stock.DrillDurationSeconds, "stock drill 8s");
+            TestAssert.Equal(5f, armed.DrillDurationSeconds, "drill arm 5s");
+        });
+
+        Case("repair drone regens hull while dry", () =>
+        {
+            var fx = ModuleLoadout.Resolve(new[] { ModuleLoadout.RepairDrone });
+            TestAssert.Equal(2f, fx.HullRegenPerSecond, "regen 2/s");
+        });
+
+        Case("twenty modules supported, four honest holdouts", () =>
+        {
+            TestAssert.Equal(20, ModuleLoadout.SupportedIds.Count, "20 implemented modules");
+            foreach (var holdout in new[] { "module.utility.emp_coil", "module.utility.decoy_launcher", "module.engine.heat_sink", "module.engine.vector_fin" })
+            {
+                TestAssert.False(ModuleLoadout.IsSupported(holdout), $"{holdout} still unsupported");
+                TestAssert.Equal(-1, ModuleLoadout.PurchasableCostOf(catalog, holdout), $"{holdout} not purchasable");
+            }
+            foreach (var id in ModuleLoadout.SupportedIds)
+            {
+                TestAssert.True(ModuleLoadout.PurchasableCostOf(catalog, id) > 0, $"{id} purchasable");
+                TestAssert.False(ModuleLoadout.Describe(id).StartsWith("No implemented", StringComparison.Ordinal), $"{id} described");
+                TestAssert.False(ModuleLoadout.EffectKey(id) == "fx=none", $"{id} has effect key");
+            }
+        });
+
         Case("duplicates, category collisions, unsupported, unknown rejected", () =>
         {
             var world = DomainSetup.World(catalog, 108UL, "biome.shelf_graveyard", "contract.salvage_quota");
@@ -129,7 +281,7 @@ internal static class ModuleLoadoutTests
             TestAssert.True(catReason.Contains("one module", StringComparison.Ordinal), "category reason: " + catReason);
             TestAssert.False(RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff",
                 null, RunSimulation.InsuranceNone, out _, out var unsupReason,
-                new[] { "module.sonar.wide_array" }, null), "unsupported catalog module rejected");
+                new[] { "module.utility.emp_coil" }, null), "unsupported catalog module rejected");
             TestAssert.True(unsupReason.Contains("no implemented in-run effect", StringComparison.Ordinal), "unsupported reason: " + unsupReason);
             TestAssert.False(RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff",
                 null, RunSimulation.InsuranceNone, out _, out var unknownReason,

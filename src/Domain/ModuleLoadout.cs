@@ -3,12 +3,13 @@ namespace AbyssScav.Domain;
 /// <summary>
 /// Centralized field-module loadout policy (single-player only).
 /// <para>
-/// Exactly 6 of the 24 catalog modules have real, implemented in-run effects;
-/// the remaining 18 are catalog data only (purchase/equip unavailable until
-/// their effects exist — owned copies are retained, never deleted or charged).
-/// One slot per category (Sonar / Engine / Hull / Utility): at most one
-/// equipped module per category. Blueprints are permanent unlocks: equipping
-/// never consumes them, and the domain never mutates the profile.
+/// Exactly 20 of the 24 catalog modules have real, implemented in-run effects;
+/// the remaining 4 (emp coil, decoy launcher, heat sink, vector fin) are catalog
+/// data only (purchase/equip unavailable until their effects exist — owned
+/// copies are retained, never deleted or charged). One slot per category
+/// (Sonar / Engine / Hull / Utility): at most one equipped module per category.
+/// Blueprints are permanent unlocks: equipping never consumes them, and the
+/// domain never mutates the profile.
 /// </para>
 /// </summary>
 public static class ModuleLoadout
@@ -34,10 +35,53 @@ public static class ModuleLoadout
     /// <summary>One emergency buoy charge; fired before failure, retention +0.3 (cap 0.9).</summary>
     public const string EmergencyBuoy = "module.utility.emergency_buoy";
 
-    /// <summary>Every module ID with an implemented in-run effect (exactly 7).</summary>
+    /// <summary>Longer pulse reach, louder pulse threat, faster cooldown.</summary>
+    public const string WideArray = "module.sonar.wide_array";
+
+    /// <summary>Sharper pulse returns (+0.1 confidence per ping), faster cooldown.</summary>
+    public const string FocusBeam = "module.sonar.focus_beam";
+
+    /// <summary>Biological contacts read better (+0.15 confidence), slower cooldown.</summary>
+    public const string ResonanceClassifier = "module.sonar.resonance_classifier";
+
+    /// <summary>False contacts need higher threat (ghost threshold 60 -> 80).</summary>
+    public const string GhostFilter = "module.sonar.ghost_filter";
+
+    /// <summary>More thrust, more engine noise.</summary>
+    public const string OverdriveThruster = "module.engine.overdrive_thruster";
+
+    /// <summary>Quieter engine with no thrust loss.</summary>
+    public const string CavitationDampener = "module.engine.cavitation_dampener";
+
+    /// <summary>Thrust x1.5 while hull is below 30% (escape burst).</summary>
+    public const string EmergencyReverse = "module.engine.emergency_reverse";
+
+    /// <summary>Higher hull pressure rating and extra max hull.</summary>
+    public const string AbyssPlating = "module.hull.abyss_plating";
+
+    /// <summary>Breach fill rate x0.5 (flooding spreads half as fast).</summary>
+    public const string FloodBulkhead = "module.hull.flood_bulkhead";
+
+    /// <summary>Pump rate 3/s -> 6/s (floods drain twice as fast).</summary>
+    public const string SelfSealingFoam = "module.hull.self_sealing_foam";
+
+    /// <summary>Creature strike damage x0.7.</summary>
+    public const string ShockBuffer = "module.hull.shock_buffer";
+
+    /// <summary>Drill cut 8s -> 5s.</summary>
+    public const string DrillArm = "module.utility.drill_arm";
+
+    /// <summary>Hull regen 2/s while no compartment is flooding.</summary>
+    public const string RepairDrone = "module.utility.repair_drone";
+
+    /// <summary>Every module ID with an implemented in-run effect (exactly 20).</summary>
     public static readonly IReadOnlySet<string> SupportedIds = new HashSet<string>(StringComparer.Ordinal)
     {
         WhisperPulse, PassiveBooster, QuietProp, ReinforcedRib, PressureSkin, SalvageMagnet, EmergencyBuoy,
+        WideArray, FocusBeam, ResonanceClassifier, GhostFilter,
+        OverdriveThruster, CavitationDampener, EmergencyReverse,
+        AbyssPlating, FloodBulkhead, SelfSealingFoam, ShockBuffer,
+        DrillArm, RepairDrone,
     };
 
     /// <summary>Resolved numeric effects of a validated loadout. All multipliers default to neutral.</summary>
@@ -50,7 +94,16 @@ public static class ModuleLoadout
         float EngineThrustMult,
         float MaxHullBonus,
         float HullRatingBonus,
-        float SalvageRangeMeters);
+        float SalvageRangeMeters,
+        float PulseConfidenceBonus,
+        float BioConfidenceBonus,
+        float GhostThresholdBonus,
+        float EmergencyThrustMult,
+        float FloodFillMult,
+        float PumpRateBonus,
+        float CreatureDamageMult,
+        float DrillDurationMult,
+        float HullRegenPerSecond);
 
     private static readonly LoadoutEffects Neutral = new(
         PulseRangeMult: 1f,
@@ -61,7 +114,16 @@ public static class ModuleLoadout
         EngineThrustMult: 1f,
         MaxHullBonus: 0f,
         HullRatingBonus: 0f,
-        SalvageRangeMeters: DomainConstants.InteractRangeMeters);
+        SalvageRangeMeters: DomainConstants.InteractRangeMeters,
+        PulseConfidenceBonus: 0f,
+        BioConfidenceBonus: 0f,
+        GhostThresholdBonus: 0f,
+        EmergencyThrustMult: 1f,
+        FloodFillMult: 1f,
+        PumpRateBonus: 0f,
+        CreatureDamageMult: 1f,
+        DrillDurationMult: 1f,
+        HullRegenPerSecond: 0f);
 
     /// <summary>True when the module has an implemented in-run effect.</summary>
     public static bool IsSupported(string moduleId) =>
@@ -92,6 +154,19 @@ public static class ModuleLoadout
             PressureSkin => "Pressure skin: hull pressure rating +20. No max-hull change.",
             SalvageMagnet => "Salvage magnet: salvage reach 15m -> 24m. No cargo change.",
             EmergencyBuoy => "Emergency buoy: one charge; fired before a failed run, failure retention +0.3 (cap 0.9).",
+            WideArray => "Wide array: pulse range x1.3, pulse threat x1.2, cooldown 8.0s -> 6.5s. Bigger picture, louder pings.",
+            FocusBeam => "Focus beam: pulse confidence +0.1 per ping, cooldown 8.0s -> 6.0s. Sharper returns, faster cycling.",
+            ResonanceClassifier => "Resonance classifier: biological contacts +0.15 confidence per ping, cooldown 8.0s -> 9.0s. Better creature reads, slower cycling.",
+            GhostFilter => "Ghost filter: false contacts need threat above 80 (was 60). Fewer phantom returns.",
+            OverdriveThruster => "Overdrive thruster: thrust x1.45, engine noise x1.45. Faster, louder.",
+            CavitationDampener => "Cavitation dampener: engine noise x0.65, no thrust loss. Quiet without the crawl.",
+            EmergencyReverse => "Emergency reverse: thrust x1.5 while hull is below 30%. Escape burst when damaged.",
+            AbyssPlating => "Abyss plating: hull pressure rating +40, max hull +100. Deep-rated armor.",
+            FloodBulkhead => "Flood bulkhead: breach fill rate x0.5. Flooding spreads half as fast.",
+            SelfSealingFoam => "Self-sealing foam: pump rate 3/s -> 6/s. Floods drain twice as fast.",
+            ShockBuffer => "Shock buffer: creature strike damage x0.7. Softer hits.",
+            DrillArm => "Drill arm: drill cut 8s -> 5s. Faster extraction cuts.",
+            RepairDrone => "Repair drone: hull regen 2/s while no compartment is flooding.",
             _ => "No implemented in-run effect: unavailable for new purchase/equip (owned copies retained).",
         };
     }
@@ -111,6 +186,19 @@ public static class ModuleLoadout
             PressureSkin => "fx=hullrating_+20",
             SalvageMagnet => "fx=salvage_24m",
             EmergencyBuoy => "fx=buoy_retention_+0.3_cap0.9",
+            WideArray => "fx=pulse_range_x1.3_threat_x1.2_cd_x0.8125",
+            FocusBeam => "fx=pulse_conf_+0.1_cd_x0.75",
+            ResonanceClassifier => "fx=bio_conf_+0.15_cd_x1.125",
+            GhostFilter => "fx=ghost_threshold_+20",
+            OverdriveThruster => "fx=thrust_x1.45_noise_x1.45",
+            CavitationDampener => "fx=noise_x0.65",
+            EmergencyReverse => "fx=thrust_x1.5_below_30pct_hull",
+            AbyssPlating => "fx=hullrating_+40_maxhull_+100",
+            FloodBulkhead => "fx=floodfill_x0.5",
+            SelfSealingFoam => "fx=pump_+3",
+            ShockBuffer => "fx=creature_damage_x0.7",
+            DrillArm => "fx=drill_duration_x0.625",
+            RepairDrone => "fx=hull_regen_2_not_flooding",
             _ => "fx=none",
         };
     }
@@ -197,6 +285,19 @@ public static class ModuleLoadout
                 ReinforcedRib => fx with { MaxHullBonus = 150f },
                 PressureSkin => fx with { HullRatingBonus = 20f },
                 SalvageMagnet => fx with { SalvageRangeMeters = 24f },
+                WideArray => fx with { PulseRangeMult = 1.3f, PulseThreatMult = 1.2f, PulseCooldownMult = 6.5f / 8f },
+                FocusBeam => fx with { PulseConfidenceBonus = 0.1f, PulseCooldownMult = 6f / 8f },
+                ResonanceClassifier => fx with { BioConfidenceBonus = 0.15f, PulseCooldownMult = 9f / 8f },
+                GhostFilter => fx with { GhostThresholdBonus = 20f },
+                OverdriveThruster => fx with { EngineThrustMult = 1.45f, EngineNoiseMult = 1.45f },
+                CavitationDampener => fx with { EngineNoiseMult = 0.65f },
+                EmergencyReverse => fx with { EmergencyThrustMult = 1.5f },
+                AbyssPlating => fx with { HullRatingBonus = 40f, MaxHullBonus = 100f },
+                FloodBulkhead => fx with { FloodFillMult = 0.5f },
+                SelfSealingFoam => fx with { PumpRateBonus = 3f },
+                ShockBuffer => fx with { CreatureDamageMult = 0.7f },
+                DrillArm => fx with { DrillDurationMult = 0.625f },
+                RepairDrone => fx with { HullRegenPerSecond = 2f },
                 _ => fx,
             };
         }
