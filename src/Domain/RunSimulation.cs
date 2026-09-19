@@ -96,6 +96,37 @@ public sealed record ContractProgressSnapshot(
     int SurveysDone,
     float ObserveSeconds);
 
+/// <summary>Per-creature world state for host→client correction (docs/02 §9).</summary>
+public sealed record CreatureStateWire(
+    float X,
+    float Y,
+    float Z,
+    byte State,
+    float StateTime,
+    float StunnedSeconds,
+    float SonarExposedSeconds);
+
+/// <summary>
+/// Domain-side world snapshot (docs/02 §9): the shared, host-authoritative state
+/// a client applies to its local sim. Creatures and loot are index-aligned with
+/// the deterministic world; ship-local state (hull, pressure, power, sonar,
+/// dock) is deliberately absent.
+/// </summary>
+public sealed record WorldStateSnapshot(
+    byte Phase,
+    string? FailureReason,
+    string? MajorEventId,
+    float MajorEventRemaining,
+    int SecuredSalvageValue,
+    byte[] SalvagedLootMask,
+    byte[] ServicedNodesMask,
+    int SurveysDone,
+    int PulsesUsed,
+    float ObserveSeconds,
+    int DrillLootIndex,
+    float DrillElapsedSeconds,
+    IReadOnlyList<CreatureStateWire> Creatures);
+
 /// <summary>Result of <see cref="RunSimulation.Pulse"/>.</summary>
 public sealed record PulseResult(bool Success, string Reason, IReadOnlyList<ContactSnapshot> Contacts, float ThreatAdded, float CooldownSeconds, params object[] Args);
 
@@ -315,6 +346,8 @@ public sealed class RunSimulation
     private Vector3 _dockAnchor;
     private string? _drillLootSpawnId;
     private float _drillElapsedSeconds;
+    private bool _drillRemote;
+    private Vector3 _drillRequesterPosition;
 
     private readonly Dictionary<string, int> _consumables = new(StringComparer.Ordinal);
     private float _batteryTimer;
@@ -728,6 +761,140 @@ public sealed class RunSimulation
         }
     }
 
+    /// <summary>
+    /// Builds the host-authoritative world snapshot (docs/02 §9). Creatures and
+    /// loot are index-aligned with the deterministic world; ship-local state is
+    /// excluded. The host broadcasts this at ~15 Hz; clients apply it as
+    /// correction over their local prediction.
+    /// </summary>
+    public WorldStateSnapshot BuildWorldStateSnapshot()
+    {
+        var lootMask = new byte[(int)Math.Ceiling(_world.LootSpawns.Count / 8.0)];
+        for (var i = 0; i < _world.LootSpawns.Count; i++)
+        {
+            if (_collectedLoot.Contains(_world.LootSpawns[i].SpawnId))
+            {
+                lootMask[i / 8] |= (byte)(1 << (i % 8));
+            }
+        }
+
+        var nodeMask = new byte[(int)Math.Ceiling(_world.Nodes.Count / 8.0)];
+        for (var i = 0; i < _world.Nodes.Count; i++)
+        {
+            if (_servicedNodes.Contains(_world.Nodes[i].ServiceId))
+            {
+                nodeMask[i / 8] |= (byte)(1 << (i % 8));
+            }
+        }
+
+        var drillIndex = -1;
+        if (_drillLootSpawnId is not null)
+        {
+            for (var i = 0; i < _world.LootSpawns.Count; i++)
+            {
+                if (_world.LootSpawns[i].SpawnId == _drillLootSpawnId)
+                {
+                    drillIndex = i;
+                    break;
+                }
+            }
+        }
+
+        var creatures = new CreatureStateWire[_creatures.Count];
+        for (var i = 0; i < _creatures.Count; i++)
+        {
+            var c = _creatures[i];
+            creatures[i] = new CreatureStateWire(c.Position.X, c.Position.Y, c.Position.Z,
+                (byte)c.State, c.StateTime, c.StunnedSeconds, c.SonarExposedSeconds);
+        }
+
+        return new WorldStateSnapshot(
+            (byte)Phase, FailureReason, _majorEventKind, _majorEventRemaining,
+            SecuredSalvageValue, lootMask, nodeMask, SurveysDone, PulsesUsed,
+            _observeSeconds, drillIndex, _drillElapsedSeconds, creatures);
+    }
+
+    /// <summary>
+    /// Applies a host world snapshot to this (client) sim (docs/02 §9): creature
+    /// states, collected loot (cargo rebuilt from the deterministic world),
+    /// serviced nodes, contract progress fields, drill state, major event, and
+    /// the run phase. Ship-local state (hull, pressure, power, sonar, dock) is
+    /// untouched. Returns false when the snapshot does not match this world
+    /// (count mismatch = divergent world; the caller drops it).
+    /// </summary>
+    public bool ApplyWorldSnapshot(in WorldStateSnapshot snap)
+    {
+        if (snap.Creatures.Count != _creatures.Count) return false;
+        if (snap.SalvagedLootMask.Length != (int)Math.Ceiling(_world.LootSpawns.Count / 8.0)) return false;
+        if (snap.ServicedNodesMask.Length != (int)Math.Ceiling(_world.Nodes.Count / 8.0)) return false;
+
+        // Phase: the host's run lifecycle is authoritative once it ends. A local
+        // failure already in progress keeps its own reason.
+        if (Phase == RunPhase.Active && snap.Phase != (byte)RunPhase.Active)
+        {
+            Phase = (RunPhase)snap.Phase;
+            FailureReason = snap.FailureReason ?? FailureReason;
+        }
+
+        for (var i = 0; i < _creatures.Count; i++)
+        {
+            var w = snap.Creatures[i];
+            var c = _creatures[i];
+            c.Position = new Vector3(w.X, w.Y, w.Z);
+            c.State = (CreatureState)w.State;
+            c.StateTime = w.StateTime;
+            c.StunnedSeconds = w.StunnedSeconds;
+            c.SonarExposedSeconds = w.SonarExposedSeconds;
+        }
+
+        // Collected loot → cargo rebuilt from the deterministic world.
+        _collectedLoot.Clear();
+        _cargo.Clear();
+        _questRecovered.Clear();
+        CargoUsedMassKg = 0f;
+        SecuredSalvageValue = 0;
+        _salvageValueProgress = 0;
+        for (var i = 0; i < _world.LootSpawns.Count; i++)
+        {
+            if ((snap.SalvagedLootMask[i / 8] & (1 << (i % 8))) == 0) continue;
+            var loot = _world.LootSpawns[i];
+            _collectedLoot.Add(loot.SpawnId);
+            var value = Math.Max(0, (int)Math.Round(loot.ValueCredits * _difficulty.ResourceMultiplier));
+            _cargo.Add(new CargoItem(loot.SpawnId, loot.Kind, value, loot.MassKg, loot.QuestItemId));
+            CargoUsedMassKg += loot.MassKg;
+            SecuredSalvageValue += value;
+            _salvageValueProgress += value;
+            if (!string.IsNullOrEmpty(loot.QuestItemId))
+            {
+                _questRecovered.Add(loot.QuestItemId);
+            }
+        }
+
+        _servicedNodes.Clear();
+        for (var i = 0; i < _world.Nodes.Count; i++)
+        {
+            if ((snap.ServicedNodesMask[i / 8] & (1 << (i % 8))) != 0 && !string.IsNullOrEmpty(_world.Nodes[i].ServiceId))
+            {
+                _servicedNodes.Add(_world.Nodes[i].ServiceId);
+            }
+        }
+
+        SurveysDone = snap.SurveysDone;
+        _surveyProgress = snap.SurveysDone;
+        PulsesUsed = snap.PulsesUsed;
+        _observeSeconds = snap.ObserveSeconds;
+
+        _drillLootSpawnId = snap.DrillLootIndex >= 0 && snap.DrillLootIndex < _world.LootSpawns.Count
+            ? _world.LootSpawns[snap.DrillLootIndex].SpawnId
+            : null;
+        _drillElapsedSeconds = snap.DrillElapsedSeconds;
+        _drillRemote = false;
+
+        _majorEventKind = snap.MajorEventId;
+        _majorEventRemaining = snap.MajorEventRemaining;
+        return true;
+    }
+
     // -------------------------------------------------------------------- tick
 
     /// <summary>
@@ -791,7 +958,7 @@ public sealed class RunSimulation
         if (_burstTimer > 0f) demand += 20f;
         if (_weldTimer > 0f) demand += 25f;
         if (_drainTimer > 0f) demand += 10f;
-        if (_drillLootSpawnId is not null) demand += DomainConstants.DrillPowerDrawPU;
+        if (_drillLootSpawnId is not null && !_drillRemote) demand += DomainConstants.DrillPowerDrawPU;
         if (_modifierIds.Contains("modifier.severe_current")) demand += 10f;
         if (_majorEventKind == "event.current_shift") demand += 15f;
         PowerDemand = demand;
@@ -811,7 +978,7 @@ public sealed class RunSimulation
         var engineTerm = (8f + 45f * thr * (input.Boost ? 1.3f : 1f)) * _frame.NoiseFactor * _loadout.EngineNoiseMult;
         _noiseSpike = Math.Max(0f, _noiseSpike - 18f * dt);
         var target = engineTerm + _noiseSpike;
-        if (_drillLootSpawnId is not null) target += 18f; // drill bit + cuttings pump.
+        if (_drillLootSpawnId is not null && !_drillRemote) target += 18f; // drill bit + cuttings pump.
         if (_modifierIds.Contains("modifier.severe_current")) target += 8f;
         if (_majorEventKind == "event.current_shift") target += 10f;
         if (_majorEventKind == "event.relic_resonance") target += 30f;
@@ -823,7 +990,7 @@ public sealed class RunSimulation
         var nesting = _modifierIds.Contains("modifier.nesting_season") ? 1.2f : 1f;
         var apexWeight = _creatures.Any(c => c.IsApex) ? 0.1f : 0f;
         Threat = Math.Min(100f, Threat + (0.15f + (Noise / 100f) * 0.6f * _difficulty.DetectMultiplier + apexWeight) * _difficulty.ThreatRateMultiplier * nesting * dt);
-        if (_drillLootSpawnId is not null)
+        if (_drillLootSpawnId is not null && !_drillRemote)
             Threat = Math.Min(100f, Threat + DomainConstants.DrillThreatPerSecond * dt);
 
         UpdateDrill(dt);
@@ -1044,7 +1211,17 @@ public sealed class RunSimulation
     /// salvage magnet), a free cargo slot, and free mass. Quest items are unique: re-salvage is rejected.
     /// INTEGRATION: <c>var r = sim.TrySalvage(spawnId);</c> — show r.Reason on failure.
     /// </summary>
-    public SalvageResult TrySalvage(string lootSpawnId)
+    public SalvageResult TrySalvage(string lootSpawnId) => TrySalvageFrom(lootSpawnId, ShipPosition);
+
+    /// <summary>
+    /// Host-side authorization of a salvage request (docs/02 §3, §9): identical
+    /// to <see cref="TrySalvage"/> but range-validated against the requester's
+    /// position instead of the host ship. The shared hold is the host's cargo,
+    /// so capacity checks are authoritative here. Used for remote player
+    /// intents; the requester's local sim already applied the same call as
+    /// prediction.
+    /// </summary>
+    public SalvageResult TrySalvageFrom(string lootSpawnId, Vector3 requesterPosition)
     {
         if (Phase != RunPhase.Active)
             return new SalvageResult(false, "Run is not active.", 0, string.Empty, Array.Empty<object>());
@@ -1057,7 +1234,7 @@ public sealed class RunSimulation
             return new SalvageResult(false, "Quest item already secured: duplicate rejected.", 0, loot.QuestItemId, Array.Empty<object>());
         if (loot.Kind == LootKind.Core)
             return new SalvageResult(false, "Facility core requires docked drill extraction: dock (J) at the facility, then hold drill (H) for 8 s. Direct manipulator recovery is refused.", 0, loot.QuestItemId, Array.Empty<object>());
-        var dist = Vector3.Distance(loot.Position, ShipPosition);
+        var dist = Vector3.Distance(loot.Position, requesterPosition);
         if (dist > SalvageRangeMeters)
             return new SalvageResult(false, "Out of manipulator range ({0:F0} m, need {1:F0} m).", 0, loot.QuestItemId, dist, SalvageRangeMeters);
         if (_cargo.Count >= _frame.CargoSlots)
@@ -1197,6 +1374,70 @@ public sealed class RunSimulation
         Raise("service.done", "Serviced {0} at {1}.", node.ServiceId, nodeId);
         CheckObjective("Service complete.");
         return new ServiceResult(true, string.Empty, Sealant, Array.Empty<object>());
+    }
+
+    /// <summary>
+    /// Host-side merge of a remote player's survey (docs/02 §9). The requester's
+    /// local sim validated the contact (existence, confidence, range) as
+    /// prediction; the host cannot see the requester's sonar, so it trusts the
+    /// claim and only merges the count into the shared contract progress.
+    /// </summary>
+    public void ApplyRemoteSurvey()
+    {
+        if (Phase != RunPhase.Active) return;
+        _surveyProgress++;
+        SurveysDone++;
+        Raise("contact.surveyed", "Remote survey logged ({0} total).", SurveysDone);
+        CheckObjective("Survey logged.");
+    }
+
+    /// <summary>
+    /// Host-side authorization of a remote service request (docs/02 §9):
+    /// validates the node and range against the requester position and marks the
+    /// target serviced. No sealant is spent here — the requester's local sim
+    /// already spent its own sealant as prediction.
+    /// </summary>
+    public ServiceResult ApplyRemoteService(string nodeId, Vector3 requesterPosition)
+    {
+        if (Phase != RunPhase.Active)
+            return new ServiceResult(false, "Run is not active.", Sealant, Array.Empty<object>());
+        var node = _world.Nodes.FirstOrDefault(n => n.Id == nodeId);
+        if (node is null)
+            return new ServiceResult(false, "Unknown node '{0}'.", Sealant, nodeId);
+        if (string.IsNullOrEmpty(node.ServiceId))
+            return new ServiceResult(false, "Node has no contract service target.", Sealant, Array.Empty<object>());
+        if (_servicedNodes.Contains(node.ServiceId))
+            return new ServiceResult(false, "Service target already completed: duplicate rejected.", Sealant, Array.Empty<object>());
+        if (!IsServiceRequired(node.ServiceId))
+            return new ServiceResult(false, "Service target '{0}' is not part of this contract.", Sealant, node.ServiceId);
+        var dist = Vector3.Distance(node.Position, requesterPosition);
+        if (dist > DomainConstants.ServiceRangeMeters)
+            return new ServiceResult(false, "Out of service range ({0:F0} m, need {1:F0} m).", Sealant, dist, DomainConstants.ServiceRangeMeters);
+
+        _servicedNodes.Add(node.ServiceId);
+        Raise("service.done", "Remote service complete at {0}.", nodeId);
+        CheckObjective("Service complete.");
+        return new ServiceResult(true, string.Empty, Sealant, Array.Empty<object>());
+    }
+
+    /// <summary>
+    /// Host-side world effect of a remote player's pulse (docs/02 §9): creatures
+    /// inside the requester's pulse range become sonar-exposed and converge,
+    /// exactly like a local pulse. The requester's own sonar contacts and threat
+    /// are ship-local and stay on its sim.
+    /// </summary>
+    public void ApplyRemotePulse(Vector3 requesterPosition)
+    {
+        if (Phase != RunPhase.Active) return;
+        var range = _biome.PulseRangeMeters * _loadout.PulseRangeMult;
+        if (_modifierIds.Contains("modifier.sonar_blackout")) range *= 0.7f;
+        foreach (var creature in _creatures)
+        {
+            if (Vector3.Distance(creature.Position, requesterPosition) <= range * 0.9f)
+            {
+                creature.SonarExposedSeconds = 15f;
+            }
+        }
     }
 
     /// <summary>
@@ -1449,6 +1690,43 @@ public sealed class RunSimulation
     }
 
     /// <summary>
+    /// Host-side authorization of a remote player's drill start (docs/02 §9):
+    /// validates the target and range against the requester's position, but
+    /// requires no host dock (the requester's local sim validated its own dock
+    /// state as prediction). The cut runs in remote mode: no host power draw,
+    /// noise, or threat, and the dock-drift guard is replaced by a range guard
+    /// against the requester position.
+    /// </summary>
+    public DrillResult TryStartDrillFrom(string lootSpawnId, Vector3 requesterPosition)
+    {
+        if (Phase != RunPhase.Active)
+            return new DrillResult(false, "Run is not active.", Array.Empty<object>());
+        if (_drillLootSpawnId is not null)
+            return new DrillResult(false, "Drill already running: cancel (H) first.", Array.Empty<object>());
+        var loot = _world.LootSpawns.FirstOrDefault(l => l.SpawnId == lootSpawnId);
+        if (loot is null)
+            return new DrillResult(false, "Unknown loot '{0}'.", lootSpawnId);
+        if (_collectedLoot.Contains(lootSpawnId))
+            return new DrillResult(false, "Already secured: duplicate drill rejected.", Array.Empty<object>());
+        if (!string.IsNullOrEmpty(loot.QuestItemId) && _questRecovered.Contains(loot.QuestItemId))
+            return new DrillResult(false, "Quest item already secured: duplicate rejected.", Array.Empty<object>());
+        var dist = Vector3.Distance(loot.Position, requesterPosition);
+        if (dist > DrillRangeMeters)
+            return new DrillResult(false, "Out of drill range ({0:F0} m, need {1:F0} m).", dist, DrillRangeMeters);
+        if (_cargo.Count >= _frame.CargoSlots)
+            return new DrillResult(false, "Cargo hold full: no free slot.", Array.Empty<object>());
+        if (CargoUsedMassKg + loot.MassKg > _frame.CargoMaxMassKg)
+            return new DrillResult(false, "Too heavy: needs {0:F0} kg free.", loot.MassKg);
+
+        _drillLootSpawnId = lootSpawnId;
+        _drillElapsedSeconds = 0f;
+        _drillRemote = true;
+        _drillRequesterPosition = requesterPosition;
+        Raise("drill.started", "Remote drill started on {0} ({1:F0} m): 8 s cut.", loot.Kind, dist);
+        return new DrillResult(true, string.Empty, Array.Empty<object>());
+    }
+
+    /// <summary>
     /// Cancels the active drill cut with no award and no duplicate pickup.
     /// Idle (no cut) is refused explicitly.
     /// </summary>
@@ -1491,6 +1769,46 @@ public sealed class RunSimulation
     private void UpdateDrill(float dt)
     {
         if (_drillLootSpawnId is null) return;
+        if (_drillRemote)
+        {
+            // Remote cut (docs/02 §9): no host dock requirement, no host power
+            // draw; the requester's local sim owns its dock/position constraints.
+            // Range is guarded against the requester position, never the host ship.
+            var remoteLoot = _world.LootSpawns.FirstOrDefault(l => l.SpawnId == _drillLootSpawnId);
+            if (remoteLoot is null || _collectedLoot.Contains(remoteLoot.SpawnId))
+            {
+                _drillLootSpawnId = null;
+                _drillElapsedSeconds = 0f;
+                _drillRemote = false;
+                Raise("drill.cancelled", "Drill cancelled: target gone, no duplicate award.");
+                return;
+            }
+            if (Vector3.Distance(remoteLoot.Position, _drillRequesterPosition) > DrillRangeMeters)
+            {
+                _drillLootSpawnId = null;
+                _drillElapsedSeconds = 0f;
+                _drillRemote = false;
+                Raise("drill.cancelled", "Drill cancelled: requester out of range, no salvage banked.");
+                return;
+            }
+            _drillElapsedSeconds = Math.Min(DrillDurationSeconds, _drillElapsedSeconds + dt);
+            if (_drillElapsedSeconds < DrillDurationSeconds) return;
+            if (_cargo.Count >= _frame.CargoSlots || CargoUsedMassKg + remoteLoot.MassKg > _frame.CargoMaxMassKg)
+            {
+                _drillLootSpawnId = null;
+                _drillElapsedSeconds = 0f;
+                _drillRemote = false;
+                Raise("drill.cancelled", "Drill finished but the hold cannot take it: no award, no duplicate.");
+                return;
+            }
+            var remoteValue = Math.Max(0, (int)Math.Round(remoteLoot.ValueCredits * _difficulty.ResourceMultiplier));
+            _drillLootSpawnId = null;
+            _drillElapsedSeconds = 0f;
+            _drillRemote = false;
+            BankLoot(remoteLoot, remoteValue);
+            Raise("drill.complete", "Drill cut complete on {0} (+{1} cr).", remoteLoot.Kind, remoteValue);
+            return;
+        }
         // Dock drift guard: leaving station range breaks the cut and releases
         // the dock, never a cross-map teleport.
         if (_dockedNodeId is not null)

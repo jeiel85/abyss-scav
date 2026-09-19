@@ -34,6 +34,14 @@ public static class NetLimits
     public const int MaxModifierBytes = 48;
     public const int MaxIdBytes = 64;
 
+    /// <summary>World snapshot ceilings (docs/02 §9). The world is deterministic
+    /// per manifest, so the snapshot matches creatures/loot/nodes by index and
+    /// sends compact bitmasks; these caps bound the wire size.</summary>
+    public const int MaxLootSpawns = 32;
+    public const int MaxCreatures = 16;
+    public const int MaxWorldNodes = 32;
+    public const int MaxObjectives = 8;
+
     /// <summary>LAN beacon ceiling (docs/16 §2: discovery size is bounded).</summary>
     public const int BeaconMaxBytes = 256;
 

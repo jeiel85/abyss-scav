@@ -2,8 +2,10 @@ using AbyssScav.App;
 using AbyssScav.Domain;
 using AbyssScav.Foundation;
 using AbyssScav.Infra.Logging;
+using AbyssScav.Net;
 using AbyssScav.Persistence;
 using AbyssScav.Presentation;
+using AbyssScav.Protocol;
 using Godot;
 using SysVec = System.Numerics.Vector3;
 
@@ -49,6 +51,12 @@ public partial class RunController : Node3D
     private readonly HashSet<string> _salvagedTraitIds = new(StringComparer.Ordinal);
     private float _statusPoll;
     private Label? _fatalLabel;
+    private GodotNetworkSession? _session;
+    private bool _isCoopHost;
+    private bool _isCoopClient;
+    private float _snapshotTimer;
+    private bool _lastLocalDrill;
+    private readonly byte[] _snapshotBuffer = new byte[MessageBounds.MaxPayload(MessageType.Snapshot)];
 
     public override void _Ready()
     {
@@ -171,11 +179,12 @@ public partial class RunController : Node3D
         }
         _sim = sim;
         sim.EventRaised += OnSimEvent;
+        SetupCoopMode();
 
         WorldBuilder.Build(this, world, catalog);
         SpawnSub(world);
         BuildHud();
-        BuildBuddy();
+        if (!_isCoopHost && !_isCoopClient) BuildBuddy();
         if (_isTutorial)
         {
             BuildTutorial();
@@ -261,6 +270,124 @@ public partial class RunController : Node3D
             _hud?.ShowBuddyCallout(text, critical);
             _audio?.PlayTick();
         };
+    }
+
+    /// <summary>
+    /// Co-op run mode (docs/02 §9): the host sim is the world authority and
+    /// broadcasts ~15 Hz snapshots; clients run their own sim as prediction and
+    /// correct it from snapshots, sending interaction intents for authorization.
+    /// Ships stay independent (each player's hull/pressure/sonar is local).
+    /// </summary>
+    private void SetupCoopMode()
+    {
+        var session = CoopLaunchContext.Session;
+        if (session is null || !session.IsActive || _sim is null) return;
+        _session = session;
+        _isCoopHost = session.IsHost;
+        _isCoopClient = !session.IsHost;
+        if (_isCoopHost)
+        {
+            session.IntentReceived += OnCoopIntent;
+        }
+        else
+        {
+            session.SnapshotReceived += OnCoopSnapshot;
+            _lastLocalDrill = _sim.IsDrilling;
+        }
+    }
+
+    private void BroadcastWorldSnapshot()
+    {
+        if (_sim is null || _session is null) return;
+        var domain = _sim.BuildWorldStateSnapshot();
+        var snap = new WorldSnapshot(
+            _session.SessionId, domain.Phase, domain.FailureReason, domain.MajorEventId,
+            domain.MajorEventRemaining, domain.SecuredSalvageValue, domain.SalvagedLootMask,
+            domain.ServicedNodesMask, domain.SurveysDone, domain.PulsesUsed, domain.ObserveSeconds,
+            domain.DrillLootIndex, domain.DrillElapsedSeconds,
+            domain.Creatures.Select(c => new CreatureWire(c.X, c.Y, c.Z, c.State, c.StateTime, c.StunnedSeconds, c.SonarExposedSeconds)).ToList());
+        if (WorldSnapshotCodec.TryEncode(snap, _snapshotBuffer, out var written))
+        {
+            _session.BroadcastSnapshot(_snapshotBuffer.AsSpan(0, written).ToArray());
+        }
+    }
+
+    private void SendCoopIntent(IntentType type, string targetId, Vector3 godotPosition, int extra)
+    {
+        if (_session is null) return;
+        var pos = WorldBuilder.ToS(godotPosition);
+        var intent = new PlayerIntent(_session.SessionId, type, targetId, pos.X, pos.Y, pos.Z, extra);
+        Span<byte> buffer = stackalloc byte[MessageBounds.MaxPayload(MessageType.PlayerIntent)];
+        if (PlayerIntentCodec.TryEncode(intent, buffer, out var written))
+        {
+            // Host peer id is always 1 (NetworkLobby.HostPeerId).
+            _session.SendIntent(1, buffer[..written].ToArray());
+        }
+    }
+
+    /// <summary>Host: authorize a remote player's interaction against the shared world.</summary>
+    private void OnCoopIntent(ulong peerId, byte[] payload)
+    {
+        if (_sim is null || _ended || _session is null) return;
+        if (!PlayerIntentCodec.TryDecode(payload, out var intent) || intent is null) return;
+        if (intent.SessionId != _session.SessionId) return;
+        var pos = new SysVec(intent.PositionX, intent.PositionY, intent.PositionZ);
+        switch (intent.Type)
+        {
+            case IntentType.Salvage:
+                _sim.TrySalvageFrom(intent.TargetId, pos);
+                break;
+            case IntentType.DrillStart:
+                _sim.TryStartDrillFrom(intent.TargetId, pos);
+                break;
+            case IntentType.DrillCancel:
+                _sim.TryCancelDrill();
+                break;
+            case IntentType.Survey:
+                _sim.ApplyRemoteSurvey();
+                break;
+            case IntentType.Service:
+                _sim.ApplyRemoteService(intent.TargetId, pos);
+                break;
+            case IntentType.Pulse:
+                _sim.ApplyRemotePulse(pos);
+                break;
+        }
+    }
+
+    /// <summary>Client: correct the local prediction from the host's world snapshot.</summary>
+    private void OnCoopSnapshot(ulong peerId, byte[] payload)
+    {
+        if (_sim is null || _ended || _session is null) return;
+        if (!WorldSnapshotCodec.TryDecode(payload, out var snap) || snap is null) return;
+        if (snap.SessionId != _session.SessionId) return;
+        var domain = new WorldStateSnapshot(
+            snap.Phase, snap.FailureReason, snap.MajorEventId, snap.MajorEventRemaining,
+            snap.SecuredSalvageValue, snap.SalvagedLootMask, snap.ServicedNodesMask,
+            snap.SurveysDone, snap.PulsesUsed, snap.ObserveSeconds, snap.DrillLootIndex,
+            snap.DrillElapsedSeconds,
+            snap.Creatures.Select(c => new CreatureStateWire(c.X, c.Y, c.Z, c.State, c.StateTime, c.StunnedSeconds, c.SonarExposedSeconds)).ToList());
+        if (!_sim.ApplyWorldSnapshot(domain)) return;
+        if (snap.Phase == (byte)RunPhase.Extracted)
+        {
+            OnHostExtracted();
+        }
+    }
+
+    /// <summary>Client: the host's run ended by extraction — the expedition is over.</summary>
+    private void OnHostExtracted()
+    {
+        if (_ended) return;
+        _ended = true;
+        _hud?.ShowEnd(Localization.T("EXPEDITION COMPLETE"), Localization.T("The host extracted. This profile was not credited."), false);
+    }
+
+    /// <summary>Client: the session died (host left or network loss) — end honestly.</summary>
+    private void OnHostDisconnected()
+    {
+        if (_ended) return;
+        _ended = true;
+        _hud?.ShowEnd(Localization.T("HOST DISCONNECTED"), Localization.T("The host left. Run ended; nothing was credited."), false);
     }
 
     private void BuildTutorial()
@@ -382,6 +509,32 @@ public partial class RunController : Node3D
         var throttle = _quiet ? Math.Min(_sub.Throttle01, 0.25f) : _sub.Throttle01;
         var input = new ShipControlInput(throttle, _quiet, _sub.BoostHeld);
         _sim.Tick(dt, WorldBuilder.ToS(_sub.GlobalPosition), input);
+
+        if (_isCoopHost)
+        {
+            _snapshotTimer += dt;
+            if (_snapshotTimer >= 0.066f)
+            {
+                _snapshotTimer = 0f;
+                BroadcastWorldSnapshot();
+            }
+        }
+        else if (_isCoopClient)
+        {
+            // Drill-cancel watcher: the local sim cancelled its drill (undock,
+            // out of range, target gone) — tell the host so the remote cut stops.
+            var drilling = _sim.IsDrilling;
+            if (_lastLocalDrill && !drilling)
+            {
+                SendCoopIntent(IntentType.DrillCancel, string.Empty, _sub.GlobalPosition, 0);
+            }
+            _lastLocalDrill = drilling;
+            if (_session is not null && !_session.IsActive)
+            {
+                OnHostDisconnected();
+                return;
+            }
+        }
 
         if (_sim.Phase == RunPhase.Failed)
         {
@@ -535,6 +688,7 @@ public partial class RunController : Node3D
             _hud.ShowMessage(Localization.T("Ping refused: {0}", (object)Localization.T(result.Reason, result.Args)), 3f);
             return;
         }
+        if (_isCoopClient) SendCoopIntent(IntentType.Pulse, string.Empty, _sub.GlobalPosition, 0);
         _lastPulseContacts = result.Contacts;
         _audio.PlayPing();
         _hud.ShowMessage(Localization.T("Ping: {0} contacts. +{1:F0} threat.", result.Contacts.Count, result.ThreatAdded), 3f);
@@ -554,6 +708,7 @@ public partial class RunController : Node3D
         var result = _sim.TrySalvage(best.SpawnId);
         if (result.Success)
         {
+            if (_isCoopClient) SendCoopIntent(IntentType.Salvage, best.SpawnId, _sub.GlobalPosition, 0);
             _audio.PlayClunk();
             _hud.ShowMessage(Localization.T("Secured {0} +{1} cr{2}.", Localization.T(best.Kind.ToString()), result.ValueBanked, result.QuestItemId != "" ? " [" + result.QuestItemId + "]" : ""), 4f);
             // Codex discovery (real play only): relic/bio/quest salvage carries a
@@ -592,6 +747,7 @@ public partial class RunController : Node3D
         _hud.ShowMessage(result.Success ? Localization.T("Surveyed {0} ({1} total).", Localization.T(best.Class.ToString()), _sim.SurveysDone) : Localization.T("Survey refused: {0}", (object)Localization.T(result.Reason, result.Args)), 4f);
         if (result.Success)
         {
+            if (_isCoopClient) SendCoopIntent(IntentType.Survey, string.Empty, _sub.GlobalPosition, 0);
             _audio.PlayTick();
             RecordSurveyDiscovery(best);
         }
@@ -641,7 +797,11 @@ public partial class RunController : Node3D
         }
         var result = _sim.TryServiceContractNode(bestNode);
         _hud.ShowMessage(result.Success ? Localization.T("Serviced {0} (sealant {1}).", bestNode, result.SealantRemaining) : Localization.T("Service refused: {0}", (object)Localization.T(result.Reason, result.Args)), 4f);
-        if (result.Success) _audio.PlayChime();
+        if (result.Success)
+        {
+            if (_isCoopClient) SendCoopIntent(IntentType.Service, bestNode, _sub.GlobalPosition, 0);
+            _audio.PlayChime();
+        }
         RefreshHud();
     }
 
@@ -727,6 +887,7 @@ public partial class RunController : Node3D
         {
             // Toggle: second press cancels with no award.
             var cancel = _sim.TryCancelDrill();
+            if (cancel.Success && _isCoopClient) SendCoopIntent(IntentType.DrillCancel, string.Empty, _sub.GlobalPosition, 0);
             _hud.ShowMessage(cancel.Success ? Localization.T("Drill cancelled — no salvage banked.") : Localization.T("Drill cancel refused: {0}", (object)Localization.T(cancel.Reason, cancel.Args)), 3f);
             RefreshHud();
             return;
@@ -753,6 +914,7 @@ public partial class RunController : Node3D
             return;
         }
         var result = _sim.TryStartDrill(best.SpawnId);
+        if (result.Success && _isCoopClient) SendCoopIntent(IntentType.DrillStart, best.SpawnId, _sub.GlobalPosition, 0);
         _hud.ShowMessage(result.Success
             ? Localization.T("Drill turning on {0} — hold H and hold position 8 s (35 PU, threat rising). Release/second-press cancels with no award.", (object)Localization.T(best.Kind.ToString()))
             : Localization.T("Drill refused: {0}", (object)Localization.T(result.Reason, result.Args)), 4f);
@@ -761,11 +923,15 @@ public partial class RunController : Node3D
 
     private void DoDrillRelease()
     {
-        if (_sim is null || _hud is null) return;
+        if (_sim is null || _sub is null || _hud is null) return;
         if (!_sim.IsDrilling) return;
         // Hold semantics: releasing H before the 8 s cut completes cancels it.
         var cancel = _sim.TryCancelDrill();
-        if (cancel.Success) _hud.ShowMessage(Localization.T("Drill released early — no salvage banked."), 3f);
+        if (cancel.Success)
+        {
+            if (_isCoopClient) SendCoopIntent(IntentType.DrillCancel, string.Empty, _sub.GlobalPosition, 0);
+            _hud.ShowMessage(Localization.T("Drill released early — no salvage banked."), 3f);
+        }
         RefreshHud();
     }
 
@@ -985,6 +1151,7 @@ public partial class RunController : Node3D
     private void OnRunFailed()
     {
         if (_ended || _sim is null) return;
+        if (_isCoopHost) BroadcastWorldSnapshot(); // final: clients learn the run ended.
         _ended = true;
         var draft = _sim.BuildFailureSettlement();
         _audio?.PlayAlarm();
@@ -1000,6 +1167,7 @@ public partial class RunController : Node3D
     private void OnRunSucceeded(RunSettlementDraft draft)
     {
         if (_ended) return;
+        if (_isCoopHost) BroadcastWorldSnapshot(); // final: clients learn the run ended.
         _ended = true;
         _pendingDraft = draft;
         if (_isTutorial)

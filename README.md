@@ -17,15 +17,16 @@ This is a **solo-playable vertical slice** with a full host-authoritative networ
 - **Save system**: local profile with 3-generation atomic rollback and an idempotent settlement ledger.
 - **Diagnostics**: logs folder, support-bundle export, headless smoke tests, deterministic autopilot playback.
 
-### Co-op lobby (live; in-run replication is the next batch)
+### Co-op lobby + shared world sync (live; ship replication is the next batch)
 - **Multiplayer**: ENet host-authoritative listen server, LAN discovery, Direct-IP join, UPnP port mapping, reconnect grace, host-loss settlement protection — implemented and covered by tests.
 - **Lobby UI**: host a LAN lobby, join by direct IP, or pick a session from LAN discovery; player list with ready states, host contract staging, and a run-manifest broadcast that loads the same deterministic world for every peer.
-- **Honest scope**: the run scene is still solo per player on the shared world — host-authoritative ship/creature replication inside the run is the next batch. The lobby and manifest flow are real and testable now.
+- **In-run world sync**: the host's `RunSimulation` is the world authority — a 15 Hz `WorldSnapshot` (loot/node bitmasks, drill state, contract progress, creature states, phase) replicates the shared world, and client interactions (salvage, drill, survey, service, pulse) apply locally as prediction then send `PlayerIntent`s the host re-validates by position. Run end (failed/extracted/host loss) is mirrored to clients.
+- **Honest scope**: ship transform replication is not in yet — each player pilots their own submarine on the shared world, and only the host's extraction is credited (clients see a message). Join-in-progress and reconnect takeover are the next batch.
 
 ### Not implemented
 - Accessibility features (colorblind sonar palettes, high-contrast HUD, key remapping) — **not present**; do not expect them in this build.
 - 2 of 24 modules have no in-run effect yet and are not purchasable/equippable (heat sink, vector fin).
-- In-run co-op replication (host snapshots, client intents, join-in-progress, reconnect takeover).
+- Ship transform replication (each player's submarine position/heading), join-in-progress, reconnect takeover, host-loss settlement.
 
 ## Quick Start
 

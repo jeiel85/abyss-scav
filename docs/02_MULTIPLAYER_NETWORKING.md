@@ -119,14 +119,46 @@ Host가 `RunManifest`를 생성한다.
 client는 manifest를 받은 뒤 로컬 generation을 수행하되, host의 layout hash와 불일치하면 join을 실패시키고 diagnostic code를 표시한다.
 
 ## 9. Snapshot/interpolation
-- host snapshot: 15 Hz baseline
-- transform buffer: 100~150 ms
-- local interaction feedback는 즉시 표시 가능하지만 결과는 host ack 후 확정
-- submarine은 host transform을 기준으로 보정
-- large correction은 0.3~0.8초 blend, teleport threshold 초과 시 snap
+**구현 상태: 공유 월드 상태 동기화(호스트 권위) — 1단계 완료.** 함선 복제(transform 보간)는 다음 배치.
+
+### 9.1 World snapshot (host → client, unreliable, 15 Hz)
+호스트의 `RunSimulation`이 월드 권위를 가진다. 클라이언트는 **같은 매니페스트(동일 LayoutHash)로 생성한 결정적 월드**를 로컬에 두고, 호스트 스냅샷을 **인덱스 정렬**로 적용한다(월드가 결정적이므로 ID 대신 인덱스/비트마스크로 충분하다).
+
+`WorldSnapshot` wire 필드:
+- `SessionId`, `Phase`, `FailureReason`, `MajorEventId`, `MajorEventRemaining`
+- `SecuredSalvageValue`, `SurveysDone`, `PulsesUsed`, `ObserveSeconds`
+- `SalvagedLootMask` / `ServicedNodesMask` — 로트·노드 상태 비트마스크
+- `DrillLootIndex`(-1 = 없음), `DrillElapsedSeconds`
+- `Creatures[]` — `CreatureWire(X, Y, Z, State, StateTime, StunnedSeconds, SonarExposedSeconds)` 25 B/개
+
+선박 로컬 상태(선체/압력/전력/소나/도크/elapsed)는 스냅샷에서 제외 — 각 플레이어의 함선은 자기 로컬 sim이 소유한다.
+
+### 9.2 Player intent (client → host, reliable)
+상호작용은 클라이언트 로컬 sim에 **예측 적용** 후 성공 시 인텐트를 전송하고, 호스트가 위치 파라미터 메서드(`TrySalvageFrom`/`TryStartDrillFrom`/`ApplyRemoteService`)로 재검증·승인한다. 다음 스냅샷이 확정/롤백을 전달한다.
+
+`IntentType`: `Salvage=1`, `DrillStart=2`, `DrillCancel=3`, `Survey=4`, `Service=5`, `Pulse=6`
+
+- **Salvage/DrillStart/Service**: 호스트가 요청자 위치로 범위 검증. 드릴은 호스트 sim에서 원격 모드로 진행(도크 불요, 전력/소음/위협 미부과, 8초 절단 후 화물 입금).
+- **DrillCancel**: 클라이언트 로컬 드릴이 취소된 경우(언도크/범위 이탈/타깃 소실) watcher가 전송.
+- **Survey**: 클라이언트가 소나 기반으로 검증(호스트는 요청자 소나를 볼 수 없음) → 호스트는 병합만 수행. 문서화된 한계.
+- **Pulse**: 호스트가 범위 내 크리처에 `SonarExposedSeconds=15`만 적용(세계 효과). 요청자의 접촉/위협은 로컬.
+
+### 9.3 Phase 전이
+스냅샷의 `Phase`는 클라이언트 로컬 sim이 Active일 때만 적용된다.
+- `Failed` → 기존 `OnRunFailed` 경로(클라이언트 sim이 `BuildFailureSettlement`로 정산)
+- `Extracted` → `OnHostExtracted`(메시지 표시, 정산 없음 — 호스트만 크레딧)
+- 호스트는 런 종료 시 최종 스냅샷을 1회 브로드캐스트해 클라이언트가 종료를 인지한다.
+
+### 9.4 Host loss
+호스트 세션이 비활성화되면 클라이언트는 `OnHostDisconnected`로 런을 종료한다(정산 없음). 호스트 마이그레이션은 v2.1 범위 밖.
+
+### 9.5 다음 배치(미구현)
+- 함선 transform 복제·보간(100~150 ms buffer, large correction blend)
+- 크리처 마커/로트 마커의 스냅샷 보정 렌더링(현재 클라이언트는 예측 크리처 표시)
+- join-in-progress, reconnect, host-loss settlement(§10-12 참조)
 
 ## 10. Join-in-progress
-허용 조건:
+**미구현(다음 배치).** 허용 조건과 동기화 순서는 아래 설계를 따른다.
 - host lobby setting이 허용
 - extraction final sequence 이전
 - protocol/catalog 일치
@@ -140,6 +172,7 @@ client는 manifest를 받은 뒤 로컬 generation을 수행하되, host의 layo
 6. player spawn
 
 ## 11. Reconnect
+**미구현(다음 배치).** 설계:
 - peer마다 session-scoped reconnect token 생성
 - 기본 grace: 120초
 - reconnect 성공 시 기존 player entity takeover
@@ -147,9 +180,9 @@ client는 manifest를 받은 뒤 로컬 generation을 수행하되, host의 layo
 - IP address를 identity로 사용하지 않는다.
 
 ## 12. Host loss
-v2.1은 full host migration을 제공하지 않는다.
+**구현 상태: 즉시 종료 정책만 구현.** 호스트 세션 비활성화 시 클라이언트는 `OnHostDisconnected`로 런을 종료한다(정산 없음). v2.1은 full host migration을 제공하지 않는다.
 
-정책:
+설계(다음 배치):
 1. host disconnect 감지
 2. 8초 reconnect window
 3. 실패하면 클라이언트는 host-loss settlement 진입

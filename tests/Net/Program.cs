@@ -9,6 +9,7 @@ var suites = new (string Suite, Func<int> Run)[]
     ("Beacon", BeaconTests.Run),
     ("Manifest", ManifestTests.Run),
     ("Lobby", LobbyTests.Run),
+    ("WorldSnapshot", WorldSnapshotTests.Run),
 };
 
 var totalFail = 0;

@@ -30,7 +30,7 @@ public static class MessageBounds
         MessageType.ReconnectClaim => 192,
         MessageType.PlayerIntent => 512,
         MessageType.GameEvent => 1024,
-        MessageType.Snapshot => 1024,
+        MessageType.Snapshot => 2048,
         _ => -1,
     };
 
