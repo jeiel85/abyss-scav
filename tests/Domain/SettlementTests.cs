@@ -136,6 +136,15 @@ internal static class SettlementTests
             TestAssert.False(RunSimulation.TryGetInsuranceQuote("insurance.nope", out _, out var reason), "unknown rejected: " + reason);
         });
 
+        Case("insurance premium is departure cost times rate", () =>
+        {
+            TestAssert.Equal(0L, RunSimulation.InsurancePremiumCredits("insurance.none"), "none is free");
+            TestAssert.Equal((long)Math.Round(DomainConstants.DepartureCostCredits * 0.08), RunSimulation.InsurancePremiumCredits("insurance.basic"), "basic = 8% of departure cost");
+            TestAssert.Equal((long)Math.Round(DomainConstants.DepartureCostCredits * 0.15), RunSimulation.InsurancePremiumCredits("insurance.premium"), "premium = 15% of departure cost");
+            TestAssert.Equal(0L, RunSimulation.InsurancePremiumCredits("insurance.nope"), "unknown is free");
+            TestAssert.True(DomainConstants.DepartureCostCredits > 0, "departure cost is a positive basis");
+        });
+
         Case("emergency buoy fired boosts failure retention by 0.3 capped at 0.9", () =>
         {
             var world = DomainSetup.World(catalog, 306UL, "biome.shelf_graveyard", "contract.salvage_quota");

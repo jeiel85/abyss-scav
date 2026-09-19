@@ -84,3 +84,43 @@ public enum SettlementApplyOutcome
 }
 
 public sealed record SettlementApplyResult(SettlementApplyOutcome Outcome, ProfileSave Save);
+
+/// <summary>
+/// Upfront insurance-premium charge (docs/05 §4): a negative-credits ledger
+/// entry keyed by a unique charge id. Applied at launch before the run starts;
+/// the run is refused when the charge cannot land (insufficient funds or a
+/// save fault), so paid coverage is never granted free.
+/// </summary>
+public sealed record InsuranceChargePayload(string Id, long PremiumCredits)
+{
+    public const long MaxPremium = 1_000_000L;
+
+    /// <summary>Validate host-confirmed input shape; returns false with reason on rejection.</summary>
+    public bool TryValidate(out string reason)
+    {
+        var id = (Id ?? string.Empty).Trim();
+        if (id.Length == 0 || id.Length > ProfileSave.MaxIdLength || !SaveIds.IsValid(id))
+        {
+            reason = "Insurance charge id is missing or not a stable id.";
+            return false;
+        }
+
+        if (PremiumCredits <= 0 || PremiumCredits > MaxPremium)
+        {
+            reason = "Insurance premium must be positive and within safe bounds.";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+}
+
+public enum InsuranceChargeOutcome
+{
+    Applied,
+    AlreadyApplied,
+    InsufficientFunds,
+}
+
+public sealed record InsuranceChargeResult(InsuranceChargeOutcome Outcome, ProfileSave Save);

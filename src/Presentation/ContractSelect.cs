@@ -13,9 +13,9 @@ namespace AbyssScav.Presentation;
 /// frame, difficulty, seed, modifiers, insurance, and the field-module loadout
 /// (one slot per category, owned blueprints only). Generates and validates via
 /// the domain before launching; failures show reasons, never a fake launch.
-/// Paid insurance stays unselectable: docs/05 §4 prices it at 8%/15% of a
-/// departure cost that has no charge flow yet, so enabling it would be free
-/// coverage — a fake benefit.
+/// Paid insurance (docs/05 §4: 8%/15% of the departure cost) charges the
+/// profile idempotently at launch; the dive is refused when the charge cannot
+/// land, so paid coverage is never granted free.
 /// </summary>
 public partial class ContractSelect : Control
 {
@@ -34,6 +34,7 @@ public partial class ContractSelect : Control
     private readonly List<CheckBox> _consumableBoxes = new();
     private Button? _launch;
     private FileSaveStore? _saveStore;
+    private ProfileSave _profile = ProfileSave.Default();
     private List<string> _ownedBlueprints = new();
     private readonly Dictionary<string, OptionButton> _moduleSlots = new(StringComparer.Ordinal);
     private Label? _loadoutDesc;
@@ -166,18 +167,11 @@ public partial class ContractSelect : Control
         _insurance = LabeledOption(content, Localization.T("Insurance"), new List<string>
         {
             $"{RunSimulation.InsuranceNone}|{Localization.T("No cover (20% retention)")}",
-            $"{RunSimulation.InsuranceBasic}|{Localization.T("Basic (50% retention)")}",
-            $"{RunSimulation.InsurancePremium}|{Localization.T("Premium (70% retention)")}",
+            $"{RunSimulation.InsuranceBasic}|{Localization.T("Basic (50% retention) — {0} cr", RunSimulation.InsurancePremiumCredits(RunSimulation.InsuranceBasic))}",
+            $"{RunSimulation.InsurancePremium}|{Localization.T("Premium (70% retention) — {0} cr", RunSimulation.InsurancePremiumCredits(RunSimulation.InsurancePremium))}",
         });
-        // Paid policies are priced (docs/05 §4: 8%/15% of departure cost) but
-        // no departure-cost charge flow exists yet, so selecting them would be
-        // free coverage — a fake benefit. Only the free policy is selectable
-        // until that flow lands.
-        if (_insurance is not null)
-        {
-            _insurance.Disabled = true;
-            _insurance.TooltipText = Localization.T("Paid insurance costs 8%/15% of departure cost (docs/05 §4), but no charge flow exists yet — selecting it would grant free coverage. Only the free policy is available.");
-        }
+        // Paid policies charge the profile at launch (idempotent, docs/05 §4);
+        // the dive is refused when the charge cannot land.
         _biome.ItemSelected += _ => { RefreshContracts(); UpdateDescription(); };
         _contract.ItemSelected += _ => UpdateDescription();
         _frame.ItemSelected += _ => UpdateDescription();
@@ -331,7 +325,7 @@ public partial class ContractSelect : Control
         _desc.Text = string.Join("\n", parts);
     }
 
-    private void OnLaunch()
+    private async void OnLaunch()
     {
         if (_catalog is null || _status is null || !IsInstanceValid(this)) return;
         if (!IsInstanceValid(_status)) return;
@@ -373,7 +367,73 @@ public partial class ContractSelect : Control
             SelectedId(_frame!), seed, mods, SelectedId(_insurance!),
             ModuleIds: moduleIds, OwnedBlueprints: new List<string>(_ownedBlueprints),
             ConsumableIds: consumableIds);
-        Launch(options);
+        // Pre-flight first: generation + validation + dry-run must pass before
+        // any money moves, so a refused run never costs the player a premium.
+        if (!TryPreflight(options, out var world, out var preflightError))
+        {
+            _status.Text = preflightError;
+            return;
+        }
+        if (!await ChargeInsuranceAsync(options.InsuranceId)) return;
+        RunLaunchContext.Pending = options;
+        _status.Text = Localization.T("World ready: {0} nodes, {1} legs, route {2} waypoints. Diving…", world!.Nodes.Count, world.Segments.Count, world.RouteFromExtractionToObjective.Count);
+        Navigate(AppScene.RunLoading);
+    }
+
+    /// <summary>
+    /// Charges the selected paid policy to the profile before the run starts.
+    /// Returns false (with a visible reason) when the charge cannot land —
+    /// paid coverage is never granted free. Free policy returns true untouched.
+    /// </summary>
+    private async Task<bool> ChargeInsuranceAsync(string insuranceId)
+    {
+        var premium = RunSimulation.InsurancePremiumCredits(insuranceId);
+        if (premium <= 0) return true;
+        if (_status is null || !IsInstanceValid(_status)) return false;
+        if (GameServices.WritesSuspendedByChoice)
+        {
+            _status.Text = Localization.T("Paid insurance needs a saved profile: this unsaved session cannot charge it. Use No cover.");
+            return false;
+        }
+        if (!_profileReady)
+        {
+            _status.Text = Localization.T("Profile still loading: wait a moment, or use No cover.");
+            return false;
+        }
+        if (!_profileUsable || _saveStore is null)
+        {
+            _status.Text = Localization.T("Profile unreadable: paid insurance cannot be charged. Use No cover.");
+            return false;
+        }
+        if (_profile.Currencies.Credits < premium)
+        {
+            _status.Text = Localization.T("Insufficient credits for paid insurance: need {0} cr, have {1} cr.", premium, _profile.Currencies.Credits);
+            return false;
+        }
+        var ct = _cts?.Token ?? CancellationToken.None;
+        var chargeId = "charge.insurance." + Guid.NewGuid().ToString("N");
+        try
+        {
+            var result = await _saveStore.ApplyInsuranceChargeAsync(new InsuranceChargePayload(chargeId, premium), ct);
+            if (ct.IsCancellationRequested || !IsInstanceValid(this)) return false;
+            if (result.Outcome == InsuranceChargeOutcome.InsufficientFunds)
+            {
+                _status.Text = Localization.T("Insufficient credits for paid insurance: need {0} cr, have {1} cr.", premium, result.Save.Currencies.Credits);
+                return false;
+            }
+            _profile = result.Save; // refresh the ledger view (Applied or AlreadyApplied)
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (ct.IsCancellationRequested || !IsInstanceValid(this)) return false;
+            _status.Text = Localization.T("Insurance charge failed ({0}): nothing charged, no dive. Retry when storage is available.", (object)ex.GetType().Name);
+            return false;
+        }
     }
 
     private void OnTutorialLaunch()
@@ -381,37 +441,57 @@ public partial class ContractSelect : Control
         Launch(RunLaunchOptions.Tutorial());
     }
 
-    private void Launch(RunLaunchOptions options)
+    /// <summary>
+    /// Generation + validation + dry-run pre-flight. Returns false with a
+    /// player-facing reason; never a fake launch.
+    /// </summary>
+    private bool TryPreflight(RunLaunchOptions options, out GeneratedWorld? world, out string error)
     {
-        if (_catalog is null || _status is null || !IsInstanceValid(this)) return;
-        if (!IsInstanceValid(_status)) return;
+        world = null;
+        if (_catalog is null || _status is null || !IsInstanceValid(this) || !IsInstanceValid(_status))
+        {
+            error = Localization.T("Selection screen is not ready.");
+            return false;
+        }
         if (!options.TryValidate(_catalog, out var problems))
         {
-            _status.Text = Localization.T("Invalid selection: {0}", (object)string.Join("; ", problems));
-            return;
+            error = Localization.T("Invalid selection: {0}", (object)string.Join("; ", problems));
+            return false;
         }
-        // Honest pre-flight: generate + validate + dry-run the sim now.
         var request = new RunGenerationRequest(options.RunSeed, options.BiomeId, options.ContractId, _catalog);
-        if (!TrenchGenerator.TryGenerate(request, out var world, out var verdict, out var reason) || world is null)
+        if (!TrenchGenerator.TryGenerate(request, out var generated, out var verdict, out var reason) || generated is null)
         {
-            _status.Text = Localization.T("Generation refused: {0}", (object)reason);
-            return;
+            error = Localization.T("Generation refused: {0}", (object)reason);
+            return false;
         }
         if (!verdict.IsValid)
         {
-            _status.Text = Localization.T("World invalid: {0}", (object)string.Join("; ", verdict.Errors));
-            return;
+            error = Localization.T("World invalid: {0}", (object)string.Join("; ", verdict.Errors));
+            return false;
         }
-        if (!RunSimulation.TryCreate(world, _catalog, options.DifficultyId, options.FrameId,
+        if (!RunSimulation.TryCreate(generated, _catalog, options.DifficultyId, options.FrameId,
                 options.ModifierIds, options.InsuranceId, out _, out var simReason,
                 options.EffectiveModuleIds, options.EffectiveOwnedBlueprints, options.IsTutorial,
                 options.EffectiveConsumableIds))
         {
-            _status.Text = Localization.T("Run rejected: {0}", (object)simReason);
+            error = Localization.T("Run rejected: {0}", (object)simReason);
+            return false;
+        }
+        world = generated;
+        error = string.Empty;
+        return true;
+    }
+
+    private void Launch(RunLaunchOptions options)
+    {
+        if (!TryPreflight(options, out var world, out var error))
+        {
+            if (_status is not null && IsInstanceValid(_status)) _status.Text = error;
             return;
         }
         RunLaunchContext.Pending = options;
-        _status.Text = Localization.T("World ready: {0} nodes, {1} legs, route {2} waypoints. Diving…", world.Nodes.Count, world.Segments.Count, world.RouteFromExtractionToObjective.Count);
+        if (_status is not null && IsInstanceValid(_status))
+            _status.Text = Localization.T("World ready: {0} nodes, {1} legs, route {2} waypoints. Diving…", world!.Nodes.Count, world.Segments.Count, world.RouteFromExtractionToObjective.Count);
         Navigate(AppScene.RunLoading);
     }
 
@@ -528,6 +608,7 @@ public partial class ContractSelect : Control
         {
             var profile = await _saveStore.LoadAsync(ct);
             if (ct.IsCancellationRequested || !IsInstanceValid(this)) return;
+            _profile = profile;
             _ownedBlueprints = new List<string>(profile.Unlocks.Blueprints);
             _profileReady = true;
             _profileUsable = true;

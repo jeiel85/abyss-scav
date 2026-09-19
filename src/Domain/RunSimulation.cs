@@ -205,21 +205,22 @@ public sealed class RunSimulation
     /// <summary>Insurance: no coverage. Retention 20%, rate 0% (free).</summary>
     public const string InsuranceNone = "insurance.none";
     /// <summary>
-    /// Insurance: basic. Retention 50%, rate 8% of departure cost.
-    /// The domain defines no departure cost and deducts nothing: the rate only
-    /// prices a future charge flow, and retention math assumes the caller has paid.
-    /// Keep paid selectors disabled until that flow exists.
+    /// Insurance: basic. Retention 50%, rate 8% of departure cost
+    /// (<see cref="DomainConstants.DepartureCostCredits"/>). The domain prices
+    /// the policy but never charges: the app layer deducts the premium from the
+    /// profile at launch (idempotent charge) before the run starts.
     /// </summary>
     public const string InsuranceBasic = "insurance.basic";
     /// <summary>
     /// Insurance: premium. Retention 70%, rate 15% of departure cost.
-    /// Same no-charge caveat as <see cref="InsuranceBasic"/>.
+    /// Same app-layer charge caveat as <see cref="InsuranceBasic"/>.
     /// </summary>
     public const string InsurancePremium = "insurance.premium";
 
     /// <summary>
     /// Priced insurance policy: retention paid on secured cargo after a failed run,
-    /// plus the docs/05 §4 rate as a fraction of the (not yet defined) departure cost.
+    /// plus the docs/05 §4 rate as a fraction of the departure cost
+    /// (<see cref="DomainConstants.DepartureCostCredits"/>).
     /// </summary>
     public sealed record InsuranceQuote(string InsuranceId, double Retention, double Rate);
 
@@ -243,6 +244,18 @@ public sealed class RunSimulation
         }
         reason = string.Empty;
         return true;
+    }
+
+    /// <summary>
+    /// Upfront premium in credits for a policy: departure cost × rate, rounded.
+    /// 0 for the free policy and for unknown IDs. The domain prices only; the
+    /// app layer charges the profile at launch.
+    /// </summary>
+    public static long InsurancePremiumCredits(string insuranceId)
+    {
+        if (TryGetInsuranceQuote(insuranceId, out var quote, out _) && quote is not null)
+            return (long)Math.Round(DomainConstants.DepartureCostCredits * quote.Rate);
+        return 0;
     }
 
     private static readonly string[] ZoneIds =
@@ -2048,8 +2061,8 @@ public sealed class RunSimulation
 
     private double Retention()
     {
-        // Retention math assumes the caller has paid for the selected policy; the
-        // domain charges nothing (see InsuranceBasic).
+        // Retention math assumes the app layer has charged the premium at launch
+        // (idempotent profile charge); the domain itself never touches the profile.
         if (TryGetInsuranceQuote(_insuranceId, out var quote, out _) && quote is not null)
             return quote.Retention;
         return 0.5;

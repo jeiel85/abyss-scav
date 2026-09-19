@@ -524,6 +524,115 @@ public sealed class FileSaveStore : ISaveStore
         }
     }
 
+    /// <summary>
+    /// Idempotent upfront insurance-premium charge (docs/05 §4): deducts the
+    /// premium from credits and records the charge id in the same ledger as
+    /// settlements, so a retry can never double-charge. Fails closed on
+    /// insufficient funds (no mutation, distinct outcome) — paid coverage is
+    /// never granted free. Invalid payloads are rejected before any disk
+    /// mutation. The check-and-append runs inside the same gate + cross-process
+    /// lock as <see cref="UpdateAsync"/>, so concurrent duplicates still apply
+    /// exactly once.
+    /// </summary>
+    public async Task<InsuranceChargeResult> ApplyInsuranceChargeAsync(InsuranceChargePayload payload, CancellationToken ct)
+    {
+        if (payload is null)
+        {
+            throw new ArgumentNullException(nameof(payload));
+        }
+
+        if (!payload.TryValidate(out var reason))
+        {
+            throw new SaveIOException(SaveErrorCodes.Write, "Rejected insurance charge: " + reason,
+                new InvalidOperationException(reason));
+        }
+
+        var id = payload.Id.Trim();
+        var gate = GateFor(_primaryPath);
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var lockHandle = await AcquireCrossProcessLockAsync(_primaryPath, SaveErrorCodes.Write, ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+
+            ProfileSave current;
+            try
+            {
+                Directory.CreateDirectory(_savesDir);
+                Directory.CreateDirectory(_backupsDir);
+                current = await ReadUnderLockAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (SaveException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new SaveIOException(SaveErrorCodes.Write, "Failed to stage insurance charge: " + ex.Message, ex);
+            }
+
+            if (current.AppliedSettlementIds.Contains(id, StringComparer.Ordinal))
+            {
+                return new InsuranceChargeResult(InsuranceChargeOutcome.AlreadyApplied, current);
+            }
+
+            if (current.AppliedSettlementIds.Count >= ProfileSave.MaxAppliedSettlementIds)
+            {
+                throw new SaveIOException(
+                    SaveErrorCodes.Write,
+                    $"Settlement ledger is at capacity ({ProfileSave.MaxAppliedSettlementIds}); refusing to charge {id} rather than drop history. Primary preserved.",
+                    new InvalidOperationException("Settlement ledger full."));
+            }
+
+            if (current.Currencies.Credits < payload.PremiumCredits)
+            {
+                return new InsuranceChargeResult(InsuranceChargeOutcome.InsufficientFunds, current);
+            }
+
+            var credits = Math.Clamp(current.Currencies.Credits - payload.PremiumCredits, 0, ProfileSave.MaxCurrency);
+            var mutated = current with
+            {
+                Currencies = new SaveCurrencies(credits, current.Currencies.ResearchData, current.Currencies.AbyssShards),
+                AppliedSettlementIds = current.AppliedSettlementIds.Concat(new[] { id }).ToList(),
+            };
+
+            var normalized = mutated.Normalized() with { SchemaVersion = ProfileSave.CurrentSchemaVersion };
+            var serialized = JsonSerializer.Serialize(normalized, JsonOptions);
+            var tempPath = _primaryPath + ".tmp-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                await WriteTempFileAsync(tempPath, serialized, ct).ConfigureAwait(false);
+                RotateBackups();
+                File.Move(tempPath, _primaryPath, overwrite: true);
+            }
+            catch (OperationCanceledException)
+            {
+                TryDelete(tempPath);
+                throw;
+            }
+            catch (SaveException)
+            {
+                TryDelete(tempPath);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                TryDelete(tempPath);
+                throw new SaveIOException(SaveErrorCodes.Write, "Failed to write insurance charge: " + ex.Message, ex);
+            }
+
+            return new InsuranceChargeResult(InsuranceChargeOutcome.Applied, normalized);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     // ---- internals ----
 
     private ProfileSave ParseAndMigrate(string raw)

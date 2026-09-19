@@ -47,6 +47,13 @@ public static class DomainConstants
     /// <summary>Base active-pulse cooldown in seconds.</summary>
     public const float PulseBaseCooldownSeconds = 8f;
 
+    /// <summary>
+    /// Flat per-run departure cost (credits) used as the docs/05 §4 insurance
+    /// pricing basis. The player never pays this fee directly — runs launch free —
+    /// it only prices policies: Basic 8% (40 cr), Premium 15% (75 cr). Tunable.
+    /// </summary>
+    public const long DepartureCostCredits = 500;
+
     /// <summary>Extraction succeeds within this range (meters) of the extraction node.</summary>
     public const float ExtractionRadiusMeters = 30f;
 

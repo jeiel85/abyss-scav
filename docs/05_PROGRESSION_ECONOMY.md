@@ -23,6 +23,8 @@ RiskBonus는 난이도/깊이/선택 modifier로 계산하고, 단순 플레이 
 - Basic: 출항비 8%, secured cargo 50%
 - Premium: 출항비 15%, secured cargo 70%, 1개 장착 모듈 보존
 
+**출항비(Departure Cost)**: `DomainConstants.DepartureCostCredits = 500` — 플레이어가 직접 내는 수수료가 아니라 보험료 산정 기준으로만 사용한다. 보험료 = 출항비 × 요율(Basic 40cr, Premium 75cr). 보험료는 런 시작 시 프로필 크레딧에서 멱등 청구(`ApplyInsuranceChargeAsync`, 청구 id `charge.insurance.{guid}`)되며, 청구가 성립하지 않으면(잔액 부족·저장소 오류·미저장 세션) 다이브를 거부한다 — 유료 보장이 공짜로 주어지지 않는다. 청구는 세계 생성·검증 통과 후에만 이루어져 거부된 런이 보험료를 소모하지 않는다.
+
 ## 5. 모듈 등급
 Tier 1~4. 같은 모듈을 단순 수치 상승만 하지 않는다.
 예:

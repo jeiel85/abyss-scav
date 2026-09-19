@@ -19,7 +19,6 @@ This is a **solo-playable vertical slice** with a full host-authoritative networ
 
 ### Backend only (not reachable from the UI yet)
 - **Multiplayer**: ENet host-authoritative listen server, LAN discovery, Direct-IP join, UPnP port mapping, reconnect grace, host-loss settlement protection — implemented and covered by tests, but **no lobby UI exists**, so the shipped build is solo-only.
-- **Paid insurance** (Basic / Premium): priced but disabled — there is no departure-cost charge flow yet, so only the free policy is selectable.
 
 ### Not implemented
 - Accessibility features (colorblind sonar palettes, high-contrast HUD, key remapping) — **not present**; do not expect them in this build.

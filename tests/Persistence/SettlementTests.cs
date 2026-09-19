@@ -12,6 +12,9 @@ internal static class SettlementTests
             ("concurrent_stores_and_duplicate_settlements_apply_once", ConcurrentStores),
             ("settlement_history_beyond_512_fully_preserved", HistoryBeyond512Preserved),
             ("settlement_ledger_capacity_fails_closed", LedgerCapacityFailsClosed),
+            ("insurance_charge_applies_once_and_repeat_is_noop", InsuranceChargeOnce),
+            ("insurance_charge_insufficient_funds_fails_closed", InsuranceChargeInsufficient),
+            ("insurance_charge_invalid_payload_rejected", InsuranceChargeInvalid),
             ("lock_contention_fails_closed_and_preserves_primary", LockContentionFailsClosed),
             ("child_processes_apply_settlements_without_lost_update", ChildProcessesApply),
         };
@@ -180,6 +183,79 @@ internal static class SettlementTests
         var again = await store.LoadAsync(CancellationToken.None).ConfigureAwait(false);
         TestAssert.Equal(ProfileSave.MaxAppliedSettlementIds, again.AppliedSettlementIds.Count, "no history dropped");
         TestAssert.Equal(0L, again.Currencies.Credits, "no payout");
+    }
+
+    private static async Task InsuranceChargeOnce()
+    {
+        var store = new FileSaveStore(TestTemp.SavesDir(TestTemp.NewRoot()));
+        await store.SaveAsync(ProfileSave.Default() with
+        {
+            Currencies = ProfileSave.Default().Currencies with { Credits = 1000L },
+        }, CancellationToken.None).ConfigureAwait(false);
+        var payload = new InsuranceChargePayload("charge.insurance.abc123", 40);
+
+        var first = await store.ApplyInsuranceChargeAsync(payload, CancellationToken.None).ConfigureAwait(false);
+        TestAssert.Equal(InsuranceChargeOutcome.Applied, first.Outcome, "first charge applies");
+        TestAssert.Equal(960L, first.Save.Currencies.Credits, "premium deducted");
+        TestAssert.True(first.Save.AppliedSettlementIds.Contains(payload.Id), "charge id recorded in ledger");
+
+        var bytesAfterFirst = await File.ReadAllTextAsync(store.PrimaryPath).ConfigureAwait(false);
+        var second = await store.ApplyInsuranceChargeAsync(payload, CancellationToken.None).ConfigureAwait(false);
+        TestAssert.Equal(InsuranceChargeOutcome.AlreadyApplied, second.Outcome, "repeat noop");
+        TestAssert.Equal(960L, second.Save.Currencies.Credits, "no double deduction");
+        TestAssert.Equal(
+            bytesAfterFirst,
+            await File.ReadAllTextAsync(store.PrimaryPath).ConfigureAwait(false),
+            "repeat leaves file byte-identical");
+    }
+
+    private static async Task InsuranceChargeInsufficient()
+    {
+        var store = new FileSaveStore(TestTemp.SavesDir(TestTemp.NewRoot()));
+        await store.SaveAsync(ProfileSave.Default() with
+        {
+            Currencies = ProfileSave.Default().Currencies with { Credits = 30L },
+        }, CancellationToken.None).ConfigureAwait(false);
+        var before = await File.ReadAllTextAsync(store.PrimaryPath).ConfigureAwait(false);
+
+        var result = await store.ApplyInsuranceChargeAsync(
+            new InsuranceChargePayload("charge.insurance.short", 40), CancellationToken.None).ConfigureAwait(false);
+        TestAssert.True(result.Outcome == InsuranceChargeOutcome.InsufficientFunds, "short funds refused");
+        TestAssert.Equal(30L, result.Save.Currencies.Credits, "no deduction");
+        TestAssert.True(!result.Save.AppliedSettlementIds.Contains("charge.insurance.short"), "no ledger entry");
+        TestAssert.Equal(before, await File.ReadAllTextAsync(store.PrimaryPath).ConfigureAwait(false), "file untouched");
+    }
+
+    private static async Task InsuranceChargeInvalid()
+    {
+        var store = new FileSaveStore(TestTemp.SavesDir(TestTemp.NewRoot()));
+        await store.SaveAsync(ProfileSave.Default(), CancellationToken.None).ConfigureAwait(false);
+        var before = await File.ReadAllTextAsync(store.PrimaryPath).ConfigureAwait(false);
+
+        var rejected = false;
+        try
+        {
+            await store.ApplyInsuranceChargeAsync(
+                new InsuranceChargePayload("BAD ID WITH SPACES", 40), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (SaveException)
+        {
+            rejected = true;
+        }
+        TestAssert.True(rejected, "invalid id rejected");
+
+        rejected = false;
+        try
+        {
+            await store.ApplyInsuranceChargeAsync(
+                new InsuranceChargePayload("charge.insurance.zero", 0), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (SaveException)
+        {
+            rejected = true;
+        }
+        TestAssert.True(rejected, "non-positive premium rejected");
+        TestAssert.Equal(before, await File.ReadAllTextAsync(store.PrimaryPath).ConfigureAwait(false), "no write on reject");
     }
 
     private static async Task LockContentionFailsClosed()
