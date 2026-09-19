@@ -251,10 +251,77 @@ internal static class ModuleLoadoutTests
             TestAssert.Equal(2f, fx.HullRegenPerSecond, "regen 2/s");
         });
 
-        Case("twenty modules supported, four honest holdouts", () =>
+        Case("decoy launcher grants two charges and launches spend them", () =>
         {
-            TestAssert.Equal(20, ModuleLoadout.SupportedIds.Count, "20 implemented modules");
-            foreach (var holdout in new[] { "module.utility.emp_coil", "module.utility.decoy_launcher", "module.engine.heat_sink", "module.engine.vector_fin" })
+            var world = DomainSetup.World(catalog, 119UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var sim = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.DecoyLauncher });
+            TestAssert.Equal(2, sim.DecoyCharges, "two charges");
+            TestAssert.Equal(2, sim.DecoyChargesRemaining, "both available");
+            var first = sim.TryLaunchDecoy();
+            TestAssert.True(first.Success, "first launch: " + first.Reason);
+            TestAssert.Equal(1, sim.DecoyChargesRemaining, "one spent");
+            var second = sim.TryLaunchDecoy();
+            TestAssert.True(second.Success, "second launch: " + second.Reason);
+            TestAssert.Equal(0, sim.DecoyChargesRemaining, "both spent");
+            var third = sim.TryLaunchDecoy();
+            TestAssert.False(third.Success, "third refused");
+            TestAssert.True(third.Reason.Contains("No decoy charges", StringComparison.Ordinal), "reason: " + third.Reason);
+        });
+
+        Case("decoy launcher without module refuses", () =>
+        {
+            var world = DomainSetup.World(catalog, 120UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var sim = DomainSetup.Sim(catalog, world);
+            TestAssert.Equal(0, sim.DecoyCharges, "no charges without module");
+            var result = sim.TryLaunchDecoy();
+            TestAssert.False(result.Success, "refused");
+            TestAssert.True(result.Reason.Contains("No decoy launcher", StringComparison.Ordinal), "reason: " + result.Reason);
+        });
+
+        Case("emp coil stuns creatures within 120 m for 6 s", () =>
+        {
+            var world = DomainSetup.World(catalog, 121UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var sim = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.EmpCoil });
+            TestAssert.Equal(1, sim.EmpCharges, "one charge");
+            TestAssert.Equal(1, sim.EmpChargesRemaining, "available");
+            // Park the ship on top of a creature so it would investigate the
+            // moment the FSM runs; the stun must freeze it in place first.
+            var any = sim.CreatureStates[0];
+            DomainSetup.Teleport(sim, any.Position);
+            var result = sim.TryFireEmp();
+            TestAssert.True(result.Success, "fired: " + result.Reason);
+            TestAssert.Equal(0, sim.EmpChargesRemaining, "charge spent");
+            var frozen = sim.CreatureStates.First(c => c.Id == any.Id);
+            var frozenState = frozen.State;
+            var before = frozen.Position;
+            DomainSetup.Wait(sim, 3f);
+            var during = sim.CreatureStates.First(c => c.Id == any.Id);
+            TestAssert.True(Vector3.Distance(before, during.Position) < 0.01f, "stunned creature holds still");
+            TestAssert.Equal(frozenState, during.State, "stunned creature keeps its state");
+            DomainSetup.Wait(sim, 6f);
+            var after = sim.CreatureStates.First(c => c.Id == any.Id);
+            TestAssert.True(
+                after.State != frozenState || Vector3.Distance(during.Position, after.Position) > 0.01f,
+                "creature resumes after the stun window");
+            var again = sim.TryFireEmp();
+            TestAssert.False(again.Success, "second fire refused");
+            TestAssert.True(again.Reason.Contains("already fired", StringComparison.Ordinal), "reason: " + again.Reason);
+        });
+
+        Case("emp coil without module refuses", () =>
+        {
+            var world = DomainSetup.World(catalog, 122UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var sim = DomainSetup.Sim(catalog, world);
+            TestAssert.Equal(0, sim.EmpCharges, "no charges without module");
+            var result = sim.TryFireEmp();
+            TestAssert.False(result.Success, "refused");
+            TestAssert.True(result.Reason.Contains("No EMP coil", StringComparison.Ordinal), "reason: " + result.Reason);
+        });
+
+        Case("twenty-two modules supported, two honest holdouts", () =>
+        {
+            TestAssert.Equal(22, ModuleLoadout.SupportedIds.Count, "22 implemented modules");
+            foreach (var holdout in new[] { "module.engine.heat_sink", "module.engine.vector_fin" })
             {
                 TestAssert.False(ModuleLoadout.IsSupported(holdout), $"{holdout} still unsupported");
                 TestAssert.Equal(-1, ModuleLoadout.PurchasableCostOf(catalog, holdout), $"{holdout} not purchasable");
@@ -281,7 +348,7 @@ internal static class ModuleLoadoutTests
             TestAssert.True(catReason.Contains("one module", StringComparison.Ordinal), "category reason: " + catReason);
             TestAssert.False(RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff",
                 null, RunSimulation.InsuranceNone, out _, out var unsupReason,
-                new[] { "module.utility.emp_coil" }, null), "unsupported catalog module rejected");
+                new[] { "module.engine.heat_sink" }, null), "unsupported catalog module rejected");
             TestAssert.True(unsupReason.Contains("no implemented in-run effect", StringComparison.Ordinal), "unsupported reason: " + unsupReason);
             TestAssert.False(RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff",
                 null, RunSimulation.InsuranceNone, out _, out var unknownReason,

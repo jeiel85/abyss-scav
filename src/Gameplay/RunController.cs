@@ -513,6 +513,8 @@ public partial class RunController : Node3D
         else if (@event.IsActionReleased("abyss_drill")) DoDrillRelease();
         else if (@event.IsActionPressed("abyss_winch")) DoWinch();
         else if (@event.IsActionPressed("abyss_buoy")) DoBuoy();
+        else if (@event.IsActionPressed("abyss_decoy")) DoDecoy();
+        else if (@event.IsActionPressed("abyss_emp")) DoEmp();
         else if (@event.IsActionPressed("abyss_consumable_1")) DoConsumable(0);
         else if (@event.IsActionPressed("abyss_consumable_2")) DoConsumable(1);
         else if (@event.IsActionPressed("abyss_consumable_3")) DoConsumable(2);
@@ -796,6 +798,32 @@ public partial class RunController : Node3D
         RefreshHud();
     }
 
+    private void DoDecoy()
+    {
+        if (_sim is null || _hud is null) return;
+        var result = _sim.TryLaunchDecoy();
+        if (!result.Success)
+        {
+            _hud.ShowMessage(Localization.T("Decoy refused: {0}", (object)Localization.T(result.Reason, result.Args)), 3f);
+            return;
+        }
+        _hud.ShowMessage(Localization.T("Acoustic decoy launched — creatures within 300 m investigate it for 20 s."), 4f);
+        RefreshHud();
+    }
+
+    private void DoEmp()
+    {
+        if (_sim is null || _hud is null) return;
+        var result = _sim.TryFireEmp();
+        if (!result.Success)
+        {
+            _hud.ShowMessage(Localization.T("EMP refused: {0}", (object)Localization.T(result.Reason, result.Args)), 3f);
+            return;
+        }
+        _hud.ShowMessage(Localization.T("EMP coil fired — creatures within 120 m stunned for 6 s."), 4f);
+        RefreshHud();
+    }
+
     private void DoConsumable(int slotIndex)
     {
         if (_sim is null || _hud is null || _catalog is null) return;
@@ -906,7 +934,7 @@ public partial class RunController : Node3D
                 if (evt.Kind.StartsWith("power.", StringComparison.Ordinal) ||
                     evt.Kind.StartsWith("pressure.", StringComparison.Ordinal) ||
                     evt.Kind.StartsWith("event.", StringComparison.Ordinal) ||
-                    evt.Kind is "consumable.used" or "buoy.fired")
+                    evt.Kind is "consumable.used" or "buoy.fired" or "decoy.launched" or "emp.fired")
                 {
                     _hud?.ShowMessage(text, 3f);
                 }

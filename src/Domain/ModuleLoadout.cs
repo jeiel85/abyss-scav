@@ -3,13 +3,12 @@ namespace AbyssScav.Domain;
 /// <summary>
 /// Centralized field-module loadout policy (single-player only).
 /// <para>
-/// Exactly 20 of the 24 catalog modules have real, implemented in-run effects;
-/// the remaining 4 (emp coil, decoy launcher, heat sink, vector fin) are catalog
-/// data only (purchase/equip unavailable until their effects exist — owned
-/// copies are retained, never deleted or charged). One slot per category
-/// (Sonar / Engine / Hull / Utility): at most one equipped module per category.
-/// Blueprints are permanent unlocks: equipping never consumes them, and the
-/// domain never mutates the profile.
+/// Exactly 22 of the 24 catalog modules have real, implemented in-run effects;
+/// the remaining 2 (heat sink, vector fin) are catalog data only (purchase/equip
+/// unavailable until their effects exist — owned copies are retained, never
+/// deleted or charged). One slot per category (Sonar / Engine / Hull / Utility):
+/// at most one equipped module per category. Blueprints are permanent unlocks:
+/// equipping never consumes them, and the domain never mutates the profile.
 /// </para>
 /// </summary>
 public static class ModuleLoadout
@@ -74,14 +73,20 @@ public static class ModuleLoadout
     /// <summary>Hull regen 2/s while no compartment is flooding.</summary>
     public const string RepairDrone = "module.utility.repair_drone";
 
-    /// <summary>Every module ID with an implemented in-run effect (exactly 20).</summary>
+    /// <summary>Two decoy charges; launched at your position, creatures within 300 m investigate for 20 s.</summary>
+    public const string DecoyLauncher = "module.utility.decoy_launcher";
+
+    /// <summary>One EMP charge; fired, creatures within 120 m are stunned for 6 s.</summary>
+    public const string EmpCoil = "module.utility.emp_coil";
+
+    /// <summary>Every module ID with an implemented in-run effect (exactly 22).</summary>
     public static readonly IReadOnlySet<string> SupportedIds = new HashSet<string>(StringComparer.Ordinal)
     {
         WhisperPulse, PassiveBooster, QuietProp, ReinforcedRib, PressureSkin, SalvageMagnet, EmergencyBuoy,
         WideArray, FocusBeam, ResonanceClassifier, GhostFilter,
         OverdriveThruster, CavitationDampener, EmergencyReverse,
         AbyssPlating, FloodBulkhead, SelfSealingFoam, ShockBuffer,
-        DrillArm, RepairDrone,
+        DrillArm, RepairDrone, DecoyLauncher, EmpCoil,
     };
 
     /// <summary>Resolved numeric effects of a validated loadout. All multipliers default to neutral.</summary>
@@ -167,6 +172,8 @@ public static class ModuleLoadout
             ShockBuffer => "Shock buffer: creature strike damage x0.7. Softer hits.",
             DrillArm => "Drill arm: drill cut 8s -> 5s. Faster extraction cuts.",
             RepairDrone => "Repair drone: hull regen 2/s while no compartment is flooding.",
+            DecoyLauncher => "Decoy launcher: two charges; launched at your position, creatures within 300 m investigate it for 20 s.",
+            EmpCoil => "EMP coil: one charge; fired, creatures within 120 m are stunned for 6 s (no movement, no strikes).",
             _ => "No implemented in-run effect: unavailable for new purchase/equip (owned copies retained).",
         };
     }
@@ -199,6 +206,8 @@ public static class ModuleLoadout
             ShockBuffer => "fx=creature_damage_x0.7",
             DrillArm => "fx=drill_duration_x0.625",
             RepairDrone => "fx=hull_regen_2_not_flooding",
+            DecoyLauncher => "fx=decoy_2_charges_300m_20s",
+            EmpCoil => "fx=emp_1_charge_120m_stun_6s",
             _ => "fx=none",
         };
     }

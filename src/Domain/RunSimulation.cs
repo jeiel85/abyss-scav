@@ -129,8 +129,8 @@ public sealed record TrainingBreachResult(bool Success, string Reason, int ZoneI
 /// <summary>Result of <see cref="RunSimulation.TryUseConsumable"/>.</summary>
 public sealed record ConsumableResult(bool Success, string Reason, int Remaining, params object[] Args);
 
-/// <summary>Result of <see cref="RunSimulation.TryFireBuoy"/>.</summary>
-public sealed record BuoyResult(bool Success, string Reason, params object[] Args);
+/// <summary>Result of a one-shot module activation (<see cref="RunSimulation.TryFireBuoy"/>, <see cref="RunSimulation.TryLaunchDecoy"/>, <see cref="RunSimulation.TryFireEmp"/>).</summary>
+public sealed record ActivationResult(bool Success, string Reason, params object[] Args);
 
 /// <summary>Result of <see cref="RunSimulation.TryExtract"/>.</summary>
 public sealed record ExtractResult(bool Success, string Reason, RunSettlementDraft? Settlement, params object[] Args);
@@ -326,6 +326,8 @@ public sealed class RunSimulation
     private Vector3 _decoyPosition;
     private Vector3 _flarePosition;
     private bool _buoyFired;
+    private int _decoyChargesRemaining;
+    private int _empChargesRemaining;
     private float _majorEventTimer;
     private string? _majorEventKind;
     private float _majorEventRemaining;
@@ -363,6 +365,8 @@ public sealed class RunSimulation
 
         foreach (var id in consumableIds ?? Array.Empty<string>())
             _consumables[id] = 1;
+        _decoyChargesRemaining = DecoyCharges;
+        _empChargesRemaining = EmpCharges;
         _majorEventTimer = _eventRng.NextFloat(120f, 240f);
 
         MaxHull = (float)Math.Round(frame.MaxHull * (modifiers.Contains("modifier.fragile_hull") ? 0.75 : 1.0) + loadout.MaxHullBonus);
@@ -637,6 +641,18 @@ public sealed class RunSimulation
 
     /// <summary>True once the emergency buoy has been fired this run (one per run).</summary>
     public bool BuoyFired => _buoyFired;
+
+    /// <summary>Decoy-launcher charges: 2 when module.utility.decoy_launcher is equipped, else 0.</summary>
+    public int DecoyCharges => _moduleIds.Contains("module.utility.decoy_launcher") ? 2 : 0;
+
+    /// <summary>Decoy charges still available this run.</summary>
+    public int DecoyChargesRemaining => _decoyChargesRemaining;
+
+    /// <summary>EMP-coil charges: 1 when module.utility.emp_coil is equipped, else 0.</summary>
+    public int EmpCharges => _moduleIds.Contains("module.utility.emp_coil") ? 1 : 0;
+
+    /// <summary>EMP charges still available this run.</summary>
+    public int EmpChargesRemaining => _empChargesRemaining;
 
     /// <summary>Active major random event kind (null when none; docs/00 §11).</summary>
     public string? ActiveMajorEvent => _majorEventKind;
@@ -1269,17 +1285,63 @@ public sealed class RunSimulation
     /// exactly once. On a failed run the buoy boosts secured-cargo retention by
     /// +0.3 (capped at 0.9) in <see cref="BuildFailureSettlement"/>.
     /// </summary>
-    public BuoyResult TryFireBuoy()
+    public ActivationResult TryFireBuoy()
     {
         if (Phase != RunPhase.Active)
-            return new BuoyResult(false, "Run is not active.", Array.Empty<object>());
+            return new ActivationResult(false, "Run is not active.", Array.Empty<object>());
         if (BuoyCharges == 0)
-            return new BuoyResult(false, "No emergency buoy equipped: install module.utility.emergency_buoy.", Array.Empty<object>());
+            return new ActivationResult(false, "No emergency buoy equipped: install module.utility.emergency_buoy.", Array.Empty<object>());
         if (_buoyFired)
-            return new BuoyResult(false, "Buoy already fired: one per run.", Array.Empty<object>());
+            return new ActivationResult(false, "Buoy already fired: one per run.", Array.Empty<object>());
         _buoyFired = true;
         Raise("buoy.fired", "Emergency buoy fired: secured salvage recovery boosted on failure.");
-        return new BuoyResult(true, string.Empty, Array.Empty<object>());
+        return new ActivationResult(true, string.Empty, Array.Empty<object>());
+    }
+
+    /// <summary>
+    /// Launches an acoustic decoy at the ship's current position (docs/00 §11,
+    /// same effect as the consumable.decoy). Requires the
+    /// module.utility.decoy_launcher module equipped and an active run; each
+    /// launch spends one of the two per-run charges. Creatures within 300 m of
+    /// the decoy investigate it for 20 s instead of the ship.
+    /// </summary>
+    public ActivationResult TryLaunchDecoy()
+    {
+        if (Phase != RunPhase.Active)
+            return new ActivationResult(false, "Run is not active.", Array.Empty<object>());
+        if (DecoyCharges == 0)
+            return new ActivationResult(false, "No decoy launcher equipped: install module.utility.decoy_launcher.", Array.Empty<object>());
+        if (_decoyChargesRemaining <= 0)
+            return new ActivationResult(false, "No decoy charges left: two per run.", Array.Empty<object>());
+        _decoyChargesRemaining--;
+        _decoyPosition = ShipPosition;
+        _decoyTimer = 20f;
+        Raise("decoy.launched", "Acoustic decoy launched: creatures within 300 m investigate it for 20 s.");
+        return new ActivationResult(true, string.Empty, Array.Empty<object>());
+    }
+
+    /// <summary>
+    /// Fires the EMP coil, stunning every creature within 120 m for 6 s
+    /// (no movement, no strikes, no state changes). Requires the
+    /// module.utility.emp_coil module equipped and an active run; one charge
+    /// per run.
+    /// </summary>
+    public ActivationResult TryFireEmp()
+    {
+        if (Phase != RunPhase.Active)
+            return new ActivationResult(false, "Run is not active.", Array.Empty<object>());
+        if (EmpCharges == 0)
+            return new ActivationResult(false, "No EMP coil equipped: install module.utility.emp_coil.", Array.Empty<object>());
+        if (_empChargesRemaining <= 0)
+            return new ActivationResult(false, "EMP already fired: one per run.", Array.Empty<object>());
+        _empChargesRemaining--;
+        foreach (var creature in _creatures)
+        {
+            if (Vector3.Distance(creature.Position, ShipPosition) <= 120f)
+                creature.StunnedSeconds = 6f;
+        }
+        Raise("emp.fired", "EMP coil fired: creatures within 120 m stunned for 6 s.");
+        return new ActivationResult(true, string.Empty, Array.Empty<object>());
     }
 
     /// <summary>
@@ -1824,6 +1886,13 @@ public sealed class RunSimulation
         {
             if (creature.SonarExposedSeconds > 0f) creature.SonarExposedSeconds -= dt;
             creature.AttackCooldown = Math.Max(0f, creature.AttackCooldown - dt);
+            // EMP stun (module.utility.emp_coil): the creature holds still —
+            // no movement, no strikes, no state changes — until the window ends.
+            if (creature.StunnedSeconds > 0f)
+            {
+                creature.StunnedSeconds -= dt;
+                continue;
+            }
             // Decoy and flare retarget nearby creatures away from the ship; the
             // FSM treats the decoy/flare position as the ship for movement and
             // state transitions while the effect window is live.
@@ -2130,6 +2199,7 @@ public sealed class RunSimulation
         public float AttackCooldown;
         public int AttackCount;
         public float SonarExposedSeconds;
+        public float StunnedSeconds;
         public bool IsApex => Def.IsApex;
 
         public CreatureRuntime(string id, CreatureDef def, Vector3 position, bool apex)

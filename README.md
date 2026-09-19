@@ -11,7 +11,7 @@ This is a **solo-playable vertical slice** with a full host-authoritative networ
 ### Playable now
 - **Solo dive loop**: contract & loadout selection → procedural trench generation → piloting, sonar, salvage, repair, docking, drilling, extraction → settlement (credits / research data / shards).
 - **Tutorial**: "The First Ping" — 7 guided steps (steer, passive sonar, active ping, dock, salvage, repair, extract).
-- **Content**: 3 biomes, 8 contract archetypes, 3 submarine frames, 24 modules (20 with implemented in-run effects), 8 consumables, 9 major random events, 4 difficulties, 11 creatures (8 + 3 apex), 8 relic traits, 8 contract modifiers.
+- **Content**: 3 biomes, 8 contract archetypes, 3 submarine frames, 24 modules (22 with implemented in-run effects), 8 consumables, 9 major random events, 4 difficulties, 11 creatures (8 + 3 apex), 8 relic traits, 8 contract modifiers.
 - **Meta progression**: Research screen (4 branches; only modules with real effects are purchasable) and Codex (survey records: creatures, waters, relic traits).
 - **Settings**: resolution, window mode, graphics quality, master volume, language (English / 한국어).
 - **Save system**: local profile with 3-generation atomic rollback and an idempotent settlement ledger.
@@ -22,7 +22,7 @@ This is a **solo-playable vertical slice** with a full host-authoritative networ
 
 ### Not implemented
 - Accessibility features (colorblind sonar palettes, high-contrast HUD, key remapping) — **not present**; do not expect them in this build.
-- 4 of 24 modules have no in-run effect yet and are not purchasable/equippable (EMP coil, decoy launcher, heat sink, vector fin).
+- 2 of 24 modules have no in-run effect yet and are not purchasable/equippable (heat sink, vector fin).
 
 ## Quick Start
 

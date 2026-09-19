@@ -257,7 +257,7 @@ public partial class RunHud : Control
             $"HULL {sim.HullIntegrity:F0}/{sim.MaxHull:F0} ({hullPct:F0}%)   MARGIN {sim.PressureMargin:F1}\n" +
             $"PWR {sim.PowerDemand:F0}/{sim.PowerSupply:F0} PU  SHED {sim.PowerShedLevel}{(sim.BrownoutActive ? " BROWNOUT" : "")}\n" +
             $"NOISE {sim.Noise:F0}  THREAT {sim.Threat:F0}{(quiet ? "  QUIET" : "")}  SEALANT {sim.Sealant}  WINCH {(sim.WinchUsed ? "SPENT" : "READY")}\n" +
-            $"GEAR {gear}  BUOY {(sim.BuoyCharges == 0 ? "—" : sim.BuoyFired ? "FIRED" : "READY (B)")}\n" +
+            $"GEAR {gear}  BUOY {(sim.BuoyCharges == 0 ? "—" : sim.BuoyFired ? "FIRED" : "READY (B)")}  DECOY {(sim.DecoyCharges == 0 ? "—" : $"{sim.DecoyChargesRemaining} (N)")}  EMP {(sim.EmpCharges == 0 ? "—" : $"{sim.EmpChargesRemaining} (M)")}\n" +
             $"DOCK {(sim.IsDocked ? sim.DockedNodeId : "FREE")}  SPEED {sim.ShipSpeedMps:F1} m/s" +
             (sim.IsDrilling ? $"  DRILL {sim.DrillElapsedSeconds:F1}/{sim.DrillDurationSeconds:F0}s" : "") +
             $"  REPAIRS {sim.RepairsDone}";
