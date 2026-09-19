@@ -79,6 +79,9 @@ public static class RunSmoke
             // Debug-only headless check: progression screens build from the real
             // catalog (no fake data), show balances, then are freed.
             CheckProgressionScreens(host, catalog, Check);
+            // Debug-only headless check: co-op screens build without a session
+            // (the lobby shows its defensive no-session state) and are freed.
+            CheckCoopScreens(host, Check);
             log.Add(ok ? "SMOKE RESULT PASS" : "SMOKE RESULT FAIL");
         }
         catch (Exception ex)
@@ -141,6 +144,26 @@ public static class RunSmoke
         catch (Exception ex)
         {
             check(false, "screen.progression", ex.GetType().Name + ": " + ex.Message);
+        }
+    }
+
+    private static void CheckCoopScreens(Node host, Action<bool, string, string> check)
+    {
+        try
+        {
+            var hostJoin = new HostOrJoinScreen { Name = "SmokeHostJoin" };
+            host.AddChild(hostJoin);
+            check(hostJoin.GetChildCount() > 0, "screen.hostjoin.build", $"children={hostJoin.GetChildCount()}");
+            hostJoin.QueueFree();
+
+            var lobby = new LobbyScreen { Name = "SmokeLobby" };
+            host.AddChild(lobby);
+            check(lobby.GetChildCount() > 0, "screen.lobby.build", $"children={lobby.GetChildCount()}");
+            lobby.QueueFree();
+        }
+        catch (Exception ex)
+        {
+            check(false, "screen.coop", ex.GetType().Name + ": " + ex.Message);
         }
     }
 

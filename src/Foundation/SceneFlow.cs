@@ -24,8 +24,11 @@ public sealed class SceneFlow
         [AppScene.Research] = [AppScene.MainMenu],
         [AppScene.Codex] = [AppScene.MainMenu],
         [AppScene.HostOrJoin] = [AppScene.Lobby, AppScene.MainMenu],
-        [AppScene.Lobby] = [AppScene.Loadout, AppScene.MainMenu],
-        [AppScene.Loadout] = [AppScene.RunLoading, AppScene.MainMenu],
+        // Lobby -> RunLoading: the host broadcasts the manifest and every peer
+        // (host included) stages the shared world. Loadout -> Lobby: the host
+        // picks a contract in co-op mode and returns to the lobby to start.
+        [AppScene.Lobby] = [AppScene.Loadout, AppScene.RunLoading, AppScene.MainMenu],
+        [AppScene.Loadout] = [AppScene.RunLoading, AppScene.Lobby, AppScene.MainMenu],
         [AppScene.RunLoading] = [AppScene.InRun, AppScene.MainMenu],
         [AppScene.InRun] = [AppScene.Settlement, AppScene.MainMenu],
         [AppScene.Settlement] = [AppScene.MainMenu],

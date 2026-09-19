@@ -9,13 +9,16 @@ using Godot;
 namespace AbyssScav.Presentation;
 
 /// <summary>
-/// Solo contract/loadout selection: biome, contract (filtered to the biome),
-/// frame, difficulty, seed, modifiers, insurance, and the field-module loadout
-/// (one slot per category, owned blueprints only). Generates and validates via
-/// the domain before launching; failures show reasons, never a fake launch.
+/// Contract/loadout selection: biome, contract (filtered to the biome), frame,
+/// difficulty, seed, modifiers, insurance, and the field-module loadout (one
+/// slot per category, owned blueprints only). Generates and validates via the
+/// domain before launching; failures show reasons, never a fake launch.
 /// Paid insurance (docs/05 §4: 8%/15% of the departure cost) charges the
 /// profile idempotently at launch; the dive is refused when the charge cannot
 /// land, so paid coverage is never granted free.
+/// In co-op mode (a live <see cref="CoopLaunchContext.Session"/>) the launch
+/// button stages the world for the lobby instead of diving: insurance is forced
+/// to No cover and the host returns to the lobby to start the shared run.
 /// </summary>
 public partial class ContractSelect : Control
 {
@@ -43,10 +46,12 @@ public partial class ContractSelect : Control
     private bool _profileUsable;
     private bool _tutorialConsumed;
     private RunLaunchOptions? _deferredTutorial;
+    private bool _coopMode;
 
     public override void _Ready()
     {
         SetAnchorsPreset(LayoutPreset.FullRect);
+        _coopMode = CoopLaunchContext.Session is not null;
         if (!ContentCatalog.TryBuild(out var catalog, out var errors) || catalog is null)
         {
             BuildError(Localization.T("Content catalog failed: {0}", (object)string.Join("; ", errors)));
@@ -138,12 +143,12 @@ public partial class ContractSelect : Control
         box.AddThemeConstantOverride("separation", 6);
         panel.AddChild(box);
 
-        var title = new Label { Text = Localization.T("SOLO DIVE — CONTRACT & LOADOUT"), HorizontalAlignment = HorizontalAlignment.Center };
+        var title = new Label { Text = _coopMode ? Localization.T("CO-OP — CONTRACT & LOADOUT") : Localization.T("SOLO DIVE — CONTRACT & LOADOUT"), HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 24);
         title.AddThemeColorOverride("font_color", Parchment());
         box.AddChild(title);
 
-        var sub = new Label { Text = Localization.T("Generate · validate · then dive. Solo dive only."), HorizontalAlignment = HorizontalAlignment.Center };
+        var sub = new Label { Text = _coopMode ? Localization.T("Stage the shared world for the lobby. Insurance is No cover in co-op.") : Localization.T("Generate · validate · then dive. Solo dive only."), HorizontalAlignment = HorizontalAlignment.Center };
         sub.AddThemeFontSizeOverride("font_size", 13);
         sub.AddThemeColorOverride("font_color", Cyan());
         box.AddChild(sub);
@@ -164,12 +169,14 @@ public partial class ContractSelect : Control
         _contract = LabeledOption(content, Localization.T("Contract"), new List<string>());
         _frame = LabeledOption(content, Localization.T("Frame"), catalog.Frames.Values.OrderBy(f => f.Id).Select(f => $"{f.Id}|{Localization.T(f.DisplayName)}").ToList());
         _difficulty = LabeledOption(content, Localization.T("Difficulty"), catalog.Difficulties.Values.OrderBy(d => d.Id).Select(d => $"{d.Id}|{Localization.T(d.DisplayName)}").ToList());
-        _insurance = LabeledOption(content, Localization.T("Insurance"), new List<string>
-        {
-            $"{RunSimulation.InsuranceNone}|{Localization.T("No cover (20% retention)")}",
-            $"{RunSimulation.InsuranceBasic}|{Localization.T("Basic (50% retention) — {0} cr", RunSimulation.InsurancePremiumCredits(RunSimulation.InsuranceBasic))}",
-            $"{RunSimulation.InsurancePremium}|{Localization.T("Premium (70% retention) — {0} cr", RunSimulation.InsurancePremiumCredits(RunSimulation.InsurancePremium))}",
-        });
+        _insurance = LabeledOption(content, Localization.T("Insurance"), _coopMode
+            ? new List<string> { $"{RunSimulation.InsuranceNone}|{Localization.T("No cover (co-op)")}" }
+            : new List<string>
+            {
+                $"{RunSimulation.InsuranceNone}|{Localization.T("No cover (20% retention)")}",
+                $"{RunSimulation.InsuranceBasic}|{Localization.T("Basic (50% retention) — {0} cr", RunSimulation.InsurancePremiumCredits(RunSimulation.InsuranceBasic))}",
+                $"{RunSimulation.InsurancePremium}|{Localization.T("Premium (70% retention) — {0} cr", RunSimulation.InsurancePremiumCredits(RunSimulation.InsurancePremium))}",
+            });
         // Paid policies charge the profile at launch (idempotent, docs/05 §4);
         // the dive is refused when the charge cannot land.
         _biome.ItemSelected += _ => { RefreshContracts(); UpdateDescription(); };
@@ -254,11 +261,12 @@ public partial class ContractSelect : Control
         box.AddChild(row);
         var back = new Button { Text = Localization.T("Back"), CustomMinimumSize = new Vector2(140, 38) };
         back.Pressed += () => Navigate(AppScene.MainMenu);
-        _launch = new Button { Text = Localization.T("Generate & Dive"), CustomMinimumSize = new Vector2(200, 38) };
+        _launch = new Button { Text = _coopMode ? Localization.T("Stage for Co-op") : Localization.T("Generate & Dive"), CustomMinimumSize = new Vector2(200, 38) };
         _launch.Pressed += OnLaunch;
         var tutorial = new Button { Text = Localization.T("Tutorial: The First Ping"), CustomMinimumSize = new Vector2(220, 38) };
         tutorial.TooltipText = Localization.T("Guided first dive: fixed waters, contract, seed 4242, and skiff. Steps are skippable; progress resumes.");
         tutorial.Pressed += OnTutorialLaunch;
+        tutorial.Visible = !_coopMode;
         row.AddChild(back);
         row.AddChild(_launch);
         row.AddChild(tutorial);
@@ -375,6 +383,16 @@ public partial class ContractSelect : Control
             return;
         }
         if (!await ChargeInsuranceAsync(options.InsuranceId)) return;
+        if (_coopMode)
+        {
+            // Co-op: stage the shared world for the lobby instead of diving.
+            // Insurance is forced to No cover above, so nothing is charged.
+            CoopLaunchContext.StagedOptions = options;
+            CoopLaunchContext.Session?.SetReady(true);
+            _status.Text = Localization.T("World staged: {0} nodes, {1} legs. Return to the lobby to start.", world!.Nodes.Count, world.Segments.Count);
+            Navigate(AppScene.Lobby);
+            return;
+        }
         RunLaunchContext.Pending = options;
         _status.Text = Localization.T("World ready: {0} nodes, {1} legs, route {2} waypoints. Diving…", world!.Nodes.Count, world.Segments.Count, world.RouteFromExtractionToObjective.Count);
         Navigate(AppScene.RunLoading);

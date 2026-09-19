@@ -10,11 +10,11 @@ using Godot;
 namespace AbyssScav.Presentation.Menus;
 
 /// <summary>
-/// Solo vertical-slice main menu: 720p-centered industrial layout on ink-blue,
-/// Solo Dive launches contract/loadout selection, co-op stays visibly disabled
-/// (Net integration is separate scope). Settings preserved. Save profile loads
-/// here; corruption shows an explicit restore prompt instead of crashing or
-/// silently resetting.
+/// Main menu: 720p-centered industrial layout on ink-blue. Solo Dive launches
+/// contract/loadout selection; Co-op opens host/join and the lobby (Net
+/// integration is live for the lobby; in-run host-authoritative replication is
+/// a later batch). Settings preserved. Save profile loads here; corruption
+/// shows an explicit restore prompt instead of crashing or silently resetting.
 /// </summary>
 public partial class MainMenu : Control
 {
@@ -48,6 +48,15 @@ public partial class MainMenu : Control
         _cts?.Dispose();
         _cts = new CancellationTokenSource();
         LoadProfileAsync(explicitRetry: false);
+        // Choke point for co-op teardown: every path back to the menu (lobby
+        // leave, run end, settlement) passes through here, so a session can
+        // never linger as a zombie after the player returns.
+        if (CoopLaunchContext.Session is { } session)
+        {
+            session.ShutdownSession();
+            session.QueueFree();
+            CoopLaunchContext.Clear();
+        }
     }
 
     public override void _ExitTree()
@@ -124,6 +133,8 @@ public partial class MainMenu : Control
         var dive = AddMenuButton(column, Localization.T("Solo Dive — Contract & Loadout"), true, Localization.T("Pick waters, contract, and frame, then dive."));
         first = dive;
         dive.Pressed += () => Navigate(AppScene.Loadout, Localization.T("Solo dive requires the contract screen."));
+        var coopButton = AddMenuButton(column, Localization.T("Co-op — Host or Join"), true, Localization.T("Host a LAN lobby, join by direct IP, or pick a session from LAN discovery. The lobby is live; in-run ship replication is a later batch."));
+        coopButton.Pressed += () => Navigate(AppScene.HostOrJoin, Localization.T("Co-op requires the host/join screen."));
         // T0 stays available after completion (replay resumes a complete checklist).
         _tutorialButton = AddMenuButton(column, Localization.T("Tutorial: The First Ping"), true, Localization.T("Guided first dive: fixed waters, contract, seed 4242, and skiff."));
         _tutorialButton.Pressed += LaunchTutorial;
@@ -283,6 +294,8 @@ public partial class MainMenu : Control
         {
             var path = target switch
             {
+                AppScene.HostOrJoin => "res://scenes/host_or_join.tscn",
+                AppScene.Lobby => "res://scenes/lobby.tscn",
                 AppScene.Loadout => "res://scenes/contract_select.tscn",
                 AppScene.RunLoading => "res://scenes/run.tscn",
                 AppScene.Research => "res://scenes/research.tscn",

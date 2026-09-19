@@ -46,6 +46,9 @@ public partial class GodotNetworkSession : Node
 
     public LobbySettings? Settings => _manager?.Settings;
 
+    /// <summary>Manifest of the started run (null until the host starts).</summary>
+    public RunManifest? CurrentManifest => _manager?.ActiveManifest;
+
     public async Task HostLobbyAsync(LobbySettings settings, string displayName, int port, CancellationToken ct)
     {
         var manager = EnsureBuilt();

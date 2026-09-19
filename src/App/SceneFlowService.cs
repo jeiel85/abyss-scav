@@ -5,7 +5,7 @@ namespace AbyssScav.App;
 
 /// <summary>
 /// Bridges the engine-independent <see cref="SceneFlow"/> to actual Godot scene changes.
-/// Ships Boot, MainMenu, contract select (Loadout), and the solo run scene.
+/// Ships Boot, MainMenu, host/join + lobby, contract select (Loadout), and the run scene.
 /// Plain class (not a Node): the registry owns the single instance, so there is
 /// no orphan node to leak at menu exit. Scene access goes via the main loop.
 /// </summary>
@@ -15,6 +15,8 @@ public sealed class SceneFlowService
     {
         [AppScene.Boot] = "res://scenes/boot.tscn",
         [AppScene.MainMenu] = "res://scenes/main_menu.tscn",
+        [AppScene.HostOrJoin] = "res://scenes/host_or_join.tscn",
+        [AppScene.Lobby] = "res://scenes/lobby.tscn",
         [AppScene.Loadout] = "res://scenes/contract_select.tscn",
         [AppScene.Research] = "res://scenes/research.tscn",
         [AppScene.Codex] = "res://scenes/codex.tscn",
