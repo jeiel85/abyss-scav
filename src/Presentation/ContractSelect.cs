@@ -296,7 +296,8 @@ public partial class ContractSelect : Control
         _contract.Clear();
         foreach (var c in _catalog.Contracts.Values.Where(c => c.AllowedBiomeIds.Contains(biomeId)).OrderBy(c => c.Id))
         {
-            _contract.AddItem($"{Localization.T(c.Archetype)} — {Localization.T(c.Description)}");
+            // Descriptions name default keys ("dock (J)"): show the player's bindings.
+            _contract.AddItem($"{Localization.T(c.Archetype)} — {InputBindings.RewriteHints(Localization.T(c.Description))}");
             _contract.SetItemMetadata(_contract.ItemCount - 1, c.Id);
         }
         if (_contract.ItemCount == 0)
@@ -323,7 +324,8 @@ public partial class ContractSelect : Control
             var cid = SelectedId(_contract);
             if (_catalog.Contracts.TryGetValue(cid, out var c))
             {
-                parts.Add(Localization.T("{0} (tier {1}, {2} cr): {3} {4}", Localization.T(c.Archetype), c.Tier, c.BasePayout, Localization.T(c.Description), Localization.T(c.DomainInteraction)));
+                parts.Add(Localization.T("{0} (tier {1}, {2} cr): {3} {4}", Localization.T(c.Archetype), c.Tier, c.BasePayout,
+                    InputBindings.RewriteHints(Localization.T(c.Description)), InputBindings.RewriteHints(Localization.T(c.DomainInteraction))));
             }
         }
         if (_frame is not null && _catalog.Frames.TryGetValue(SelectedId(_frame), out var f))

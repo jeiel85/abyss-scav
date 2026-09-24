@@ -2,6 +2,7 @@ using AbyssScav.App;
 using AbyssScav.Domain;
 using AbyssScav.Foundation;
 using AbyssScav.Infra.Logging;
+using AbyssScav.Presentation;
 using Godot;
 
 namespace AbyssScav.Gameplay;
@@ -75,6 +76,7 @@ public partial class TutorialDirector : Control
     private Label? _detail;
     private Button? _skip;
     private readonly Dictionary<string, Label> _stepLabels = new(StringComparer.Ordinal);
+    private HudTheme _theme = new(SonarPalette.Standard, false);
 
     public string? CurrentStepId => _current < StepOrder.Count ? StepOrder[_current] : null;
     public bool AllComplete => _current >= StepOrder.Count;
@@ -83,6 +85,7 @@ public partial class TutorialDirector : Control
     public override void _Ready()
     {
         MouseFilter = MouseFilterEnum.Ignore;
+        _theme = HudTheme.Current();
         BuildUi();
         RefreshUi();
     }
@@ -216,17 +219,7 @@ public partial class TutorialDirector : Control
     private void BuildUi()
     {
         var panel = new PanelContainer { Name = "TutorialPanel" };
-        var style = new StyleBoxFlat
-        {
-            BgColor = new Color(0.03f, 0.09f, 0.12f, 0.88f),
-            BorderColor = new Color("#29414b"),
-            BorderWidthLeft = 1, BorderWidthRight = 1, BorderWidthTop = 1, BorderWidthBottom = 1,
-            CornerRadiusTopLeft = 3, CornerRadiusTopRight = 3,
-            CornerRadiusBottomLeft = 3, CornerRadiusBottomRight = 3,
-            ContentMarginLeft = 10, ContentMarginRight = 10,
-            ContentMarginTop = 8, ContentMarginBottom = 8,
-        };
-        panel.AddThemeStyleboxOverride("panel", style);
+        panel.AddThemeStyleboxOverride("panel", _theme.PanelStyle());
         panel.SetAnchorsPreset(LayoutPreset.TopLeft);
         panel.Position = new Vector2(12, 168);
         panel.CustomMinimumSize = new Vector2(300, 0);
@@ -237,8 +230,7 @@ public partial class TutorialDirector : Control
         panel.AddChild(box);
 
         var title = new Label { Text = Localization.T("TUTORIAL — THE FIRST PING") };
-        title.AddThemeFontSizeOverride("font_size", 14);
-        title.AddThemeColorOverride("font_color", new Color("#71d9d1"));
+        _theme.StyleLabel(title, 14, _theme.Accent);
         box.AddChild(title);
 
         _stepsBox = new VBoxContainer();
@@ -247,14 +239,13 @@ public partial class TutorialDirector : Control
         foreach (var id in StepOrder)
         {
             var label = new Label();
-            label.AddThemeFontSizeOverride("font_size", 13);
+            _theme.StyleLabel(label, 13, _theme.Text);
             _stepsBox.AddChild(label);
             _stepLabels[id] = label;
         }
 
         _detail = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart };
-        _detail.AddThemeFontSizeOverride("font_size", 12);
-        _detail.AddThemeColorOverride("font_color", new Color("#dae4df"));
+        _theme.StyleLabel(_detail, 12, _theme.Text);
         box.AddChild(_detail);
 
         _skip = new Button { Text = Localization.T("Skip step") };
@@ -267,27 +258,27 @@ public partial class TutorialDirector : Control
 
     private void RefreshUi()
     {
-        var parchment = new Color("#dae4df");
-        var dim = new Color(0.45f, 0.55f, 0.53f);
-        var cyan = new Color("#71d9d1");
-        var amber = new Color("#dfa44d");
+        var parchment = _theme.Text;
+        var dim = _theme.HighContrast ? _theme.TextDim : new Color(0.45f, 0.55f, 0.53f);
+        var cyan = _theme.Accent;
+        var amber = _theme.Alert;
         foreach (var id in StepOrder)
         {
             if (!_stepLabels.TryGetValue(id, out var label)) continue;
             var skipped = _skipped.Contains(id);
             if (_done.Contains(id))
             {
-                label.Text = (skipped ? "○ " : "✓ ") + Localization.T(Titles[id]) + (skipped ? Localization.T(" (skipped)") : "");
+                label.Text = (skipped ? "○ " : "✓ ") + StepTitle(id) + (skipped ? Localization.T(" (skipped)") : "");
                 label.AddThemeColorOverride("font_color", dim);
             }
             else if (!AllComplete && StepOrder[_current] == id)
             {
-                label.Text = "→ " + Localization.T(Titles[id]);
+                label.Text = "→ " + StepTitle(id);
                 label.AddThemeColorOverride("font_color", amber);
             }
             else
             {
-                label.Text = "· " + Localization.T(Titles[id]);
+                label.Text = "· " + StepTitle(id);
                 label.AddThemeColorOverride("font_color", parchment);
             }
         }
@@ -306,6 +297,9 @@ public partial class TutorialDirector : Control
         }
         RefreshDetail();
     }
+
+    /// <summary>Localized step title with the player's bound key.</summary>
+    private static string StepTitle(string id) => InputBindings.RewriteHints(Localization.T(Titles[id]));
 
     private void RefreshDetail()
     {
@@ -335,7 +329,9 @@ public partial class TutorialDirector : Control
         };
         if (!string.IsNullOrEmpty(_skipNote))
             text += "\n" + _skipNote;
-        _detail.Text = text;
+        // Raw (default-key) text is rewritten exactly once, here at display time,
+        // so remapped keys show correctly; the thrust step also names W/S.
+        _detail.Text = InputBindings.RewriteHints(text, includeThrust: id == StepSteer);
         if (string.IsNullOrEmpty(_skipNote) == false && !MandatorySteps.Contains(id))
             _skipNote = "";
     }
