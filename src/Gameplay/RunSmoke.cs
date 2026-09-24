@@ -82,6 +82,7 @@ public static class RunSmoke
             // Debug-only headless check: co-op screens build without a session
             // (the lobby shows its defensive no-session state) and are freed.
             CheckCoopScreens(host, Check);
+            CheckAccessibilityUi(host, Check);
             log.Add(ok ? "SMOKE RESULT PASS" : "SMOKE RESULT FAIL");
         }
         catch (Exception ex)
@@ -99,6 +100,17 @@ public static class RunSmoke
         {
             AbyssInput.EnsureRegistered();
             check(InputMap.HasAction("abyss_ping") && InputMap.HasAction("abyss_interact"), $"inputmap.{contract}", "ping+interact registered from code");
+            check(App.InputBindings.AllAllowedKeysParse(out var badKey), $"inputmap.keynames.{contract}",
+                badKey.Length == 0 ? "every bindable key name maps to a Godot key" : "unmapped bindable key name: " + badKey);
+            var boundKeys = 0;
+            foreach (var def in KeyBindingCatalog.Actions)
+            {
+                foreach (var ev in InputMap.ActionGetEvents(def.Id))
+                {
+                    if (ev is InputEventKey) boundKeys++;
+                }
+            }
+            check(boundKeys == KeyBindingCatalog.Actions.Count, $"inputmap.bindings.{contract}", $"one keyboard key per remappable action ({boundKeys}/{KeyBindingCatalog.Actions.Count})");
             var root = new Node3D { Name = "SmokeRoot" };
             host.AddChild(root);
             WorldBuilder.Build(root, world, catalog);
@@ -144,6 +156,63 @@ public static class RunSmoke
         catch (Exception ex)
         {
             check(false, "screen.progression", ex.GetType().Name + ": " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Accessibility UI builds for real: the settings panel (palette, high
+    /// contrast, rebinding rows) and a run HUD themed with the tritan palette in
+    /// high contrast, with ping rebound to Q. The swap is in memory only (never
+    /// saved) and the original settings + InputMap bindings are restored.
+    /// </summary>
+    private static void CheckAccessibilityUi(Node host, Action<bool, string, string> check)
+    {
+        if (!App.GameServices.IsInitialized
+            || !App.GameServices.Registry.TryResolve<App.AppSettingsHolder>(out var holder) || holder is null)
+        {
+            check(false, "a11y.services", "settings holder unavailable");
+            return;
+        }
+
+        var original = holder.Current;
+        try
+        {
+            var panel = new Presentation.Menus.SettingsPanel { Name = "SmokeSettings" };
+            host.AddChild(panel);
+            panel.Reload();
+            check(panel.GetChildCount() > 0, "a11y.settings.build", $"children={panel.GetChildCount()}");
+            panel.QueueFree();
+
+            var rebound = KeyBindingCatalog.Rebind(original.KeyBindings, "abyss_ping", "Q");
+            holder.Current = original with
+            {
+                SonarPaletteId = SonarPalette.BlueYellowSafeId,
+                HighContrastHud = true,
+                KeyBindings = rebound.Bindings,
+            };
+            App.InputBindings.ApplyToInputMap(holder.Current.KeyBindings);
+            var hint = App.InputBindings.RewriteHints("No unsurveyed contacts — ping (F) first.");
+            check(hint.Contains("(Q)"), "a11y.hints.rewrite", hint);
+            check(App.InputBindings.ControlsHint().Contains("Q ping"), "a11y.hints.controls", "controls line follows binding");
+            var pingKeys = InputMap.ActionGetEvents("abyss_ping").OfType<InputEventKey>().Select(e => e.PhysicalKeycode).ToList();
+            check(pingKeys.Count == 1 && pingKeys[0] == Key.Q, "a11y.inputmap.rebind", string.Join(",", pingKeys));
+
+            var hud = new RunHud { Name = "SmokeHud" };
+            host.AddChild(hud);
+            hud.ShowMessage("No unsurveyed contacts — ping (F) first.");
+            hud.SetWarning("DOCKED — drill (H) or undock (J)");
+            check(hud.Sonar is not null, "a11y.hud.build", "high-contrast tritan HUD built");
+            // Left in the tree (the smoke quits right after) so the themed sonar
+            // scope's first deferred draw runs; draw errors then show in the log.
+        }
+        catch (Exception ex)
+        {
+            check(false, "a11y.ui", ex.GetType().Name + ": " + ex.Message);
+        }
+        finally
+        {
+            holder.Current = original;
+            App.InputBindings.ApplyToInputMap(original.KeyBindings);
         }
     }
 

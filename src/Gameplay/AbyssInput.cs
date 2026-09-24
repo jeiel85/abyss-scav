@@ -1,3 +1,4 @@
+using AbyssScav.App;
 using Godot;
 
 namespace AbyssScav.Gameplay;
@@ -5,52 +6,25 @@ namespace AbyssScav.Gameplay;
 /// <summary>
 /// Input actions registered from code (keyboard + controller, no editor config
 /// dependency). Called once per run-scene boot; safe to call repeatedly.
+/// Keyboard keys come from the player's saved bindings (Settings → key bindings,
+/// see <see cref="InputBindings"/>) and are re-applied on every call, so a rebind
+/// made in the menu takes effect on the next dive. Pause stays on Escape (also the
+/// rebind-cancel key); gamepad buttons are fixed and registered once.
 /// </summary>
 public static class AbyssInput
 {
-    private static bool _registered;
+    private static bool _fixedRegistered;
 
     public static void EnsureRegistered()
     {
-        if (_registered)
+        if (!_fixedRegistered)
         {
-            return;
+            _fixedRegistered = true;
+            Add("abyss_pause", Key.Escape);
+            BindPad();
         }
-        _registered = true;
-        Add("abyss_fwd", Key.W);
-        Add("abyss_back", Key.S);
-        Add("abyss_left", Key.A);
-        Add("abyss_right", Key.D);
-        Add("abyss_up", Key.Space);
-        Add("abyss_down", Key.Ctrl, Key.C);
-        Add("abyss_yaw_left", Key.Left);
-        Add("abyss_yaw_right", Key.Right);
-        Add("abyss_pitch_up", Key.Up);
-        Add("abyss_pitch_down", Key.Down);
-        Add("abyss_boost", Key.Shift);
-        Add("abyss_ping", Key.F);
-        Add("abyss_interact", Key.E);
-        Add("abyss_survey", Key.V);
-        Add("abyss_service", Key.G);
-        Add("abyss_repair", Key.R);
-        Add("abyss_dock", Key.J);
-        Add("abyss_drill", Key.H);
-        Add("abyss_winch", Key.X);
-        Add("abyss_buoy", Key.B);
-        Add("abyss_decoy", Key.N);
-        Add("abyss_emp", Key.M);
-        Add("abyss_consumable_1", Key.Key1);
-        Add("abyss_consumable_2", Key.Key2);
-        Add("abyss_consumable_3", Key.Key3);
-        Add("abyss_consumable_4", Key.Key4);
-        Add("abyss_consumable_5", Key.Key5);
-        Add("abyss_consumable_6", Key.Key6);
-        Add("abyss_consumable_7", Key.Key7);
-        Add("abyss_consumable_8", Key.Key8);
-        Add("abyss_extract", Key.T);
-        Add("abyss_silent", Key.Z);
-        Add("abyss_pause", Key.Escape);
-        BindPad();
+
+        InputBindings.ApplyToInputMap(InputBindings.Current);
     }
 
     private static void Add(string action, params Key[] keys)

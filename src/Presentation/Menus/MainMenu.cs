@@ -143,7 +143,7 @@ public partial class MainMenu : Control
         var codexButton = AddMenuButton(column, Localization.T("Codex"), true, Localization.T("Survey record: creatures, waters, and relic traits found on dives."));
         codexButton.Pressed += () => Navigate(AppScene.Codex, Localization.T("Codex requires the codex screen."));
 
-        var settingsButton = AddMenuButton(column, Localization.T("Settings"), true, Localization.T("Adjust window, graphics and volume."));
+        var settingsButton = AddMenuButton(column, Localization.T("Settings"), true, Localization.T("Adjust window, graphics, volume, accessibility and key bindings."));
         settingsButton.Pressed += () =>
         {
             var panel = _settingsPanel;

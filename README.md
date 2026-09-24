@@ -14,6 +14,10 @@ This is a **solo-playable vertical slice** with a full host-authoritative networ
 - **Content**: 3 biomes, 8 contract archetypes, 3 submarine frames, 24 modules (22 with implemented in-run effects), 8 consumables, 9 major random events, 4 difficulties, 11 creatures (8 + 3 apex), 8 relic traits, 8 contract modifiers.
 - **Meta progression**: Research screen (4 branches; only modules with real effects are purchasable) and Codex (survey records: creatures, waters, relic traits).
 - **Settings**: resolution, window mode, graphics quality, master volume, language (English / 한국어).
+- **Accessibility** (Settings → Accessibility / Key bindings):
+  - **Colour-vision sonar palettes** — Standard, Red–green safe (deuteranopia/protanopia, Okabe–Ito based) and Blue–yellow safe (tritanopia). Contact kinds also differ by glyph (diamond salvage, triangle biological, square structure, "?" unknown, dash terrain) with a legend under the scope, so colour is never the only cue. Palette separation is unit-tested under simulated dichromacy.
+  - **High-contrast HUD** — opaque panels, bright outlined text, heavier borders, larger outlined sonar glyphs.
+  - **Keyboard remapping** — press-to-rebind for every movement, sonar/tool and consumable action; a key already in use is swapped with the other action; one-click reset to defaults. Bindings persist in `settings.cfg` and apply on the next dive; on-screen key hints (HUD controls line, tutorial checklist, warnings, contract text) follow the current bindings. Esc (pause) and gamepad buttons are fixed.
 - **Save system**: local profile with 3-generation atomic rollback and an idempotent settlement ledger.
 - **Diagnostics**: logs folder, support-bundle export, headless smoke tests, deterministic autopilot playback.
 
@@ -24,7 +28,7 @@ This is a **solo-playable vertical slice** with a full host-authoritative networ
 - **Honest scope**: ship transform replication is not in yet — each player pilots their own submarine on the shared world, and only the host's extraction is credited (clients see a message). Join-in-progress and reconnect takeover are the next batch.
 
 ### Not implemented
-- Accessibility features (colorblind sonar palettes, high-contrast HUD, key remapping) — **not present**; do not expect them in this build.
+- Accessibility beyond the three options above: gamepad remapping, hold/toggle choice, subtitle sizing, camera shake/FOV sliders (docs/07 §6) are not in this build. Esc stays bound to pause.
 - 2 of 24 modules have no in-run effect yet and are not purchasable/equippable (heat sink, vector fin).
 - Ship transform replication (each player's submarine position/heading), join-in-progress, reconnect takeover, host-loss settlement.
 
@@ -60,6 +64,8 @@ Short version:
 
 ### Controls
 
+Default keyboard layout — every key below except Esc can be rebound in **Settings → Key bindings**.
+
 | Action | Key |
 |---|---|
 | Surge (forward/back) | W / S |
@@ -78,6 +84,8 @@ Short version:
 | Emergency winch | X |
 | Consumable 1–8 | 1–8 |
 | Fire emergency buoy | B |
+| Launch acoustic decoy | N |
+| Fire EMP coil | M |
 | Extract | T |
 | Pause | Esc |
 

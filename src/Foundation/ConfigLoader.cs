@@ -124,7 +124,9 @@ public static class ConfigLoader
 
         if (parsed.SchemaVersion < AppSettings.CurrentSchemaVersion)
         {
-            // v1 scope: only one schema so far; normalize and keep file (no destructive migration yet).
+            // Additive schemas only so far (v2 language, v3 accessibility/bindings):
+            // missing fields normalize to defaults in memory; the file is rewritten
+            // only on an explicit user save (no destructive migration).
             var normalized = parsed.Normalized() with { SchemaVersion = AppSettings.CurrentSchemaVersion };
             return new ConfigLoadResult(normalized, ConfigLoadStatus.Ok, "Migrated older settings to current schema in memory.", null, parsed.SchemaVersion);
         }
