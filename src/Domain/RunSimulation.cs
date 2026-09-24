@@ -2393,7 +2393,12 @@ public sealed class RunSimulation
                     {
                         creature.AttackCooldown = 4f;
                         creature.AttackCount++;
-                        Strike(creature);
+                        // A strike only lands on THIS ship when it is actually in
+                        // reach: a creature lured onto a decoy/flare, or one
+                        // replicated in Attack against a teammate's sub (co-op
+                        // snapshot), lunges without damaging a distant hull.
+                        if (Vector3.Distance(creature.Position, ShipPosition) <= creature.Def.AttackRangeMeters * StrikeReachSlack)
+                            Strike(creature);
                         if (creature.AttackCount >= 3)
                         {
                             creature.AttackCount = 0;
@@ -2413,6 +2418,12 @@ public sealed class RunSimulation
             }
         }
     }
+
+    /// <summary>
+    /// Reach tolerance over <c>AttackRangeMeters</c> for a landed strike: the
+    /// ship may drift a little between the Hunt→Attack transition and the blow.
+    /// </summary>
+    private const float StrikeReachSlack = 1.5f;
 
     private void Strike(CreatureRuntime creature)
     {

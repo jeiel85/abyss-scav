@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reliable frames could be dropped as replays behind newer unreliable frames from another ENet channel; replay windows are now per channel.
 - Clients now ignore host-only messages (snapshots, events, manifests, lobby, tokens) that did not come from the host.
 - A client-side ENet server loss is now always reported (once) as host loss.
+- Creature strikes landed on the ship regardless of distance once a creature was in `Attack`: a co-op client took damage from creatures replicated attacking a distant teammate, and in solo a creature lured onto a decoy/flare still damaged the far-away hull. Strikes now require the ship within 1.5x the creature's attack range.
 
 ## [0.1.0] - 2026-09-17
 
