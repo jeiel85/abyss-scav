@@ -7,6 +7,7 @@ using AbyssScav.Persistence;
 using AbyssScav.Presentation;
 using AbyssScav.Protocol;
 using Godot;
+using System.Globalization;
 using SysVec = System.Numerics.Vector3;
 
 namespace AbyssScav.Gameplay;
@@ -57,6 +58,15 @@ public partial class RunController : Node3D
     private float _snapshotTimer;
     private bool _lastLocalDrill;
     private readonly byte[] _snapshotBuffer = new byte[MessageBounds.MaxPayload(MessageType.Snapshot)];
+    private readonly byte[] _eventBuffer = new byte[MessageBounds.MaxPayload(MessageType.GameEvent)];
+    private CoopRunLink? _link;
+    private float _poseTimer;
+    private bool _extractPending;
+    private float _extractPendingAge;
+    private bool _finalSequenceSignalled;
+    private bool _snapshotEncodeWarned;
+    private const float CoopTickSeconds = 0.066f; // 4 physics frames at 60 Hz = 15 Hz.
+    private const float ExtractPendingTimeoutSeconds = 6f;
 
     public override void _Ready()
     {
@@ -184,6 +194,7 @@ public partial class RunController : Node3D
         WorldBuilder.Build(this, world, catalog);
         SpawnSub(world);
         BuildHud();
+        AttachCoopLink();
         if (!_isCoopHost && !_isCoopClient) BuildBuddy();
         if (_isTutorial)
         {
@@ -292,24 +303,142 @@ public partial class RunController : Node3D
         else
         {
             session.SnapshotReceived += OnCoopSnapshot;
+            session.EventReceived += OnCoopEvent;
             _lastLocalDrill = _sim.IsDrilling;
         }
     }
 
-    private void BroadcastWorldSnapshot()
+    /// <summary>
+    /// Ship replication + host-link watch (docs/02 §9.5, §12). Needs the spawned
+    /// sub and the HUD sonar, so it attaches after both exist.
+    /// </summary>
+    private void AttachCoopLink()
     {
-        if (_sim is null || _session is null) return;
+        if (_session is null || _world is null || _sub is null) return;
+        _link = new CoopRunLink { Name = "CoopRunLink" };
+        AddChild(_link);
+        _link.Setup(_session, _world, _sub, LocalPoseFlags, LocalHullPercent, PulseRange, _hud?.Sonar);
+        if (_isCoopClient)
+        {
+            _link.HostLinkLost += OnHostLinkLost;
+            _link.HostLinkRestored += OnHostLinkRestored;
+        }
+    }
+
+    private ShipPoseFlags LocalPoseFlags()
+    {
+        var sim = _sim;
+        if (sim is null) return ShipPoseFlags.None;
+        var flags = ShipPoseFlags.None;
+        if (_quiet) flags |= ShipPoseFlags.Quiet;
+        if (sim.IsDocked) flags |= ShipPoseFlags.Docked;
+        if (sim.IsDrilling) flags |= ShipPoseFlags.Drilling;
+        if (sim.Phase == RunPhase.Extracted) flags |= ShipPoseFlags.Extracted;
+        else if (sim.Phase is RunPhase.Failed or RunPhase.HostLost) flags |= ShipPoseFlags.Failed;
+        return flags;
+    }
+
+    private byte LocalHullPercent()
+    {
+        var sim = _sim;
+        if (sim is null || sim.MaxHull <= 0f || !float.IsFinite(sim.HullIntegrity)) return 100;
+        return (byte)Math.Clamp((int)MathF.Round(sim.HullIntegrity / sim.MaxHull * 100f), 0, 100);
+    }
+
+    /// <summary>Host: world snapshot with every player's ship pose, encoded once.</summary>
+    private byte[]? EncodeWorldSnapshot()
+    {
+        if (_sim is null || _session is null) return null;
         var domain = _sim.BuildWorldStateSnapshot();
         var snap = new WorldSnapshot(
             _session.SessionId, domain.Phase, domain.FailureReason, domain.MajorEventId,
             domain.MajorEventRemaining, domain.SecuredSalvageValue, domain.SalvagedLootMask,
             domain.ServicedNodesMask, domain.SurveysDone, domain.PulsesUsed, domain.ObserveSeconds,
             domain.DrillLootIndex, domain.DrillElapsedSeconds,
-            domain.Creatures.Select(c => new CreatureWire(c.X, c.Y, c.Z, c.State, c.StateTime, c.StunnedSeconds, c.SonarExposedSeconds)).ToList());
+            domain.Creatures.Select(c => new CreatureWire(c.X, c.Y, c.Z, c.State, c.StateTime, c.StunnedSeconds, c.SonarExposedSeconds)).ToList(),
+            _link?.BuildShipList());
         if (WorldSnapshotCodec.TryEncode(snap, _snapshotBuffer, out var written))
         {
-            _session.BroadcastSnapshot(_snapshotBuffer.AsSpan(0, written).ToArray());
+            return _snapshotBuffer.AsSpan(0, written).ToArray();
         }
+        if (!_snapshotEncodeWarned)
+        {
+            _snapshotEncodeWarned = true;
+            GodotLogBridge.Error(GameServices.Logger, "[coop] world snapshot exceeds wire bounds; clients cannot be synced this run.", NetErrors.FrameRejected);
+        }
+        return null;
+    }
+
+    private void BroadcastWorldSnapshot()
+    {
+        var bytes = EncodeWorldSnapshot();
+        if (bytes is null || _session is null) return;
+        try
+        {
+            _session.BroadcastSnapshot(bytes);
+        }
+        catch (InvalidOperationException ex)
+        {
+            GodotLogBridge.Warn(GameServices.Logger, "[coop] snapshot broadcast failed: " + ex.Message, NetErrors.TransportCreate);
+        }
+    }
+
+    /// <summary>
+    /// Host run end (docs/02 §9.3): the final world state goes out both as the
+    /// usual unreliable snapshot and as a reliable event, so every client learns
+    /// the outcome even if a datagram is lost; then admission closes and the
+    /// reconnect tokens are discarded (docs/02 §11).
+    /// </summary>
+    private void BroadcastRunEnd()
+    {
+        if (!_isCoopHost || _session is null) return;
+        var bytes = EncodeWorldSnapshot();
+        if (bytes is not null)
+        {
+            try
+            {
+                _session.BroadcastSnapshot(bytes);
+            }
+            catch (InvalidOperationException ex)
+            {
+                GodotLogBridge.Warn(GameServices.Logger, "[coop] final snapshot broadcast failed: " + ex.Message, NetErrors.TransportCreate);
+            }
+            SendCoopEvent(PeerIds.Broadcast, CoopEventType.FinalSnapshot, null, bytes);
+        }
+        _session.EndRunAdmission();
+    }
+
+    private void SendCoopEvent(ulong peerId, CoopEventType type, string? text, byte[]? body)
+    {
+        if (_session is null) return;
+        var evt = new CoopEvent(_session.SessionId, type, ClampReason(text), body);
+        if (!CoopEventCodec.TryEncode(evt, _eventBuffer, out var written))
+        {
+            GodotLogBridge.Error(GameServices.Logger, $"[coop] {type} event could not be encoded.", NetErrors.FrameRejected);
+            return;
+        }
+        var bytes = _eventBuffer.AsSpan(0, written).ToArray();
+        try
+        {
+            if (peerId == PeerIds.Broadcast) _session.BroadcastEvent(bytes);
+            else _session.SendEvent(peerId, bytes);
+        }
+        catch (InvalidOperationException ex)
+        {
+            GodotLogBridge.Warn(GameServices.Logger, $"[coop] {type} event send failed: " + ex.Message, NetErrors.TransportCreate);
+        }
+    }
+
+    /// <summary>Trims a reason to the wire cap without splitting a UTF-8 sequence.</summary>
+    private static string? ClampReason(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        var value = text;
+        while (System.Text.Encoding.UTF8.GetByteCount(value) > NetLimits.MaxReasonBytes)
+        {
+            value = value[..^1];
+        }
+        return value;
     }
 
     private void SendCoopIntent(IntentType type, string targetId, Vector3 godotPosition, int extra)
@@ -320,8 +449,16 @@ public partial class RunController : Node3D
         Span<byte> buffer = stackalloc byte[MessageBounds.MaxPayload(MessageType.PlayerIntent)];
         if (PlayerIntentCodec.TryEncode(intent, buffer, out var written))
         {
-            // Host peer id is always 1 (NetworkLobby.HostPeerId).
-            _session.SendIntent(1, buffer[..written].ToArray());
+            try
+            {
+                // Host peer id is always 1 (NetworkLobby.HostPeerId).
+                _session.SendIntent(1, buffer[..written].ToArray());
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Link down: the host-link monitor owns recovery; the intent is not retried.
+                GodotLogBridge.Warn(GameServices.Logger, $"[coop] {type} intent not sent: " + ex.Message, NetErrors.TransportCreate);
+            }
         }
     }
 
@@ -352,15 +489,72 @@ public partial class RunController : Node3D
             case IntentType.Pulse:
                 _sim.ApplyRemotePulse(pos);
                 break;
+            case IntentType.Extract:
+                AuthorizeRemoteExtraction(peerId, pos);
+                break;
         }
+    }
+
+    /// <summary>
+    /// Host: per-player extraction (docs/02 §9.6). The requester must be inside
+    /// the extraction radius (reported position, like every other intent) with
+    /// the shared primary objectives complete. Approval carries the current world
+    /// snapshot so the client settles on host-confirmed shared state.
+    /// </summary>
+    private void AuthorizeRemoteExtraction(ulong peerId, SysVec requesterPosition)
+    {
+        if (_sim is null) return;
+        var verdict = _sim.CanAuthorizeRemoteExtraction(requesterPosition);
+        if (!verdict.Success)
+        {
+            var reason = string.Format(CultureInfo.InvariantCulture, verdict.Reason, verdict.Args);
+            GodotLogBridge.Info(GameServices.Logger, $"[coop] extraction refused for peer {peerId}: {reason}");
+            SendCoopEvent(peerId, CoopEventType.ExtractRefused, reason, null);
+            return;
+        }
+        var bytes = EncodeWorldSnapshot();
+        if (bytes is null)
+        {
+            SendCoopEvent(peerId, CoopEventType.ExtractRefused, "Host could not encode the world state.", null);
+            return;
+        }
+        SendCoopEvent(peerId, CoopEventType.ExtractApproved, null, bytes);
+        GodotLogBridge.Info(GameServices.Logger, $"[coop] extraction approved for peer {peerId}.");
+        _hud?.ShowMessage(Localization.T("{0} extracted.", (object)PlayerName(peerId)), 4f);
+    }
+
+    private string PlayerName(ulong peerId)
+    {
+        if (_session is not null)
+        {
+            foreach (var p in _session.Players)
+            {
+                if (p.PeerId == peerId) return p.DisplayName;
+            }
+        }
+        return Localization.T("Diver {0}", peerId);
     }
 
     /// <summary>Client: correct the local prediction from the host's world snapshot.</summary>
     private void OnCoopSnapshot(ulong peerId, byte[] payload)
     {
-        if (_sim is null || _ended || _session is null) return;
+        if (_sim is null || _session is null) return;
         if (!WorldSnapshotCodec.TryDecode(payload, out var snap) || snap is null) return;
         if (snap.SessionId != _session.SessionId) return;
+        _link?.NotifyHostHeard();
+        _link?.ApplyShips(snap.ShipList);
+        if (_ended) return;
+        ApplyHostWorld(snap);
+    }
+
+    /// <summary>
+    /// Client: applies host world state, then reacts to a host run end. Host
+    /// extraction is a team extraction: this player settles its own success
+    /// draft (docs/02 §9.6); a host failure fails this run immediately.
+    /// </summary>
+    private void ApplyHostWorld(WorldSnapshot snap)
+    {
+        if (_sim is null || _ended) return;
         var domain = new WorldStateSnapshot(
             snap.Phase, snap.FailureReason, snap.MajorEventId, snap.MajorEventRemaining,
             snap.SecuredSalvageValue, snap.SalvagedLootMask, snap.ServicedNodesMask,
@@ -368,26 +562,83 @@ public partial class RunController : Node3D
             snap.DrillElapsedSeconds,
             snap.Creatures.Select(c => new CreatureStateWire(c.X, c.Y, c.Z, c.State, c.StateTime, c.StunnedSeconds, c.SonarExposedSeconds)).ToList());
         if (!_sim.ApplyWorldSnapshot(domain)) return;
-        if (snap.Phase == (byte)RunPhase.Extracted)
+        if (_sim.Phase == RunPhase.Extracted && _sim.Settlement is not null)
         {
-            OnHostExtracted();
+            _hud?.ShowMessage(Localization.T("The host extracted the team — settling your share."), 5f);
+            _audio?.PlayChime();
+            OnRunSucceeded(_sim.Settlement);
+        }
+        else if (_sim.Phase == RunPhase.Failed)
+        {
+            OnRunFailed();
         }
     }
 
-    /// <summary>Client: the host's run ended by extraction — the expedition is over.</summary>
-    private void OnHostExtracted()
+    /// <summary>Client: reliable host events (extraction verdicts, final run state).</summary>
+    private void OnCoopEvent(ulong peerId, byte[] payload)
     {
+        if (_sim is null || _session is null) return;
+        if (!CoopEventCodec.TryDecode(payload, out var evt) || evt is null || evt.SessionId != _session.SessionId) return;
+        _link?.NotifyHostHeard();
         if (_ended) return;
-        _ended = true;
-        _hud?.ShowEnd(Localization.T("EXPEDITION COMPLETE"), Localization.T("The host extracted. This profile was not credited."), false);
+        switch (evt.Type)
+        {
+            case CoopEventType.ExtractApproved:
+                if (!_extractPending) return; // late verdict after the local timeout: the player moved on.
+                _extractPending = false;
+                if (evt.Body is not null && WorldSnapshotCodec.TryDecode(evt.Body, out var approvedWorld) &&
+                    approvedWorld is not null && approvedWorld.SessionId == _session.SessionId)
+                {
+                    ApplyHostWorld(approvedWorld);
+                }
+                if (_ended) return;
+                var result = _sim.TryExtractByHostAuthority();
+                if (result.Success && result.Settlement is not null)
+                {
+                    _audio?.PlayChime();
+                    OnRunSucceeded(result.Settlement);
+                }
+                break;
+            case CoopEventType.ExtractRefused:
+                _extractPending = false;
+                _hud?.ShowMessage(Localization.T("Extraction refused by host: {0}", (object)(evt.Text ?? "?")), 5f);
+                break;
+            case CoopEventType.FinalSnapshot:
+                if (evt.Body is not null && WorldSnapshotCodec.TryDecode(evt.Body, out var finalWorld) &&
+                    finalWorld is not null && finalWorld.SessionId == _session.SessionId)
+                {
+                    ApplyHostWorld(finalWorld);
+                }
+                break;
+        }
     }
 
-    /// <summary>Client: the session died (host left or network loss) — end honestly.</summary>
-    private void OnHostDisconnected()
+    /// <summary>
+    /// Client: the host stayed unreachable for the whole reconnect window
+    /// (docs/02 §12). Settle host loss once: last host-confirmed cargo at the
+    /// insurance retention, idempotent through the settlement ledger.
+    /// </summary>
+    private void OnHostLinkLost()
     {
-        if (_ended) return;
+        if (_ended || _sim is null) return;
+        var draft = _sim.BuildHostLossSettlement();
+        _session?.ShutdownSession();
+        _audio?.PlayAlarm();
+        if (draft is null)
+        {
+            _ended = true;
+            _hud?.ShowEnd(Localization.T("HOST LOST"), Localization.T("The host could not be reached and the run had already ended locally; nothing further was credited."), false);
+            return;
+        }
         _ended = true;
-        _hud?.ShowEnd(Localization.T("HOST DISCONNECTED"), Localization.T("The host left. Run ended; nothing was credited."), false);
+        _pendingDraft = draft;
+        GodotLogBridge.Info(GameServices.Logger, $"Host-loss settlement {draft.SettlementId}: {draft.RetainedCredits} cr on {draft.SecuredSalvageValue} confirmed.");
+        SettleAsync(draft, failed: false);
+    }
+
+    private void OnHostLinkRestored()
+    {
+        _hud?.ShowMessage(Localization.T("Host link restored — back in the dive."), 4f);
     }
 
     private void BuildTutorial()
@@ -500,26 +751,24 @@ public partial class RunController : Node3D
 
     public override void _PhysicsProcess(double delta)
     {
-        if (_sim is null || _sub is null || _world is null || _hud is null || _paused || _ended)
+        if (_sim is null || _sub is null || _world is null || _hud is null)
         {
             return;
         }
         var dt = Math.Min((float)delta, 0.5f);
+        // Co-op traffic keeps flowing while paused so a paused host never looks
+        // like a lost host to its clients (docs/02 §12).
+        if (!_ended) TickCoopNet(dt);
+        if (_paused || _ended)
+        {
+            return;
+        }
         _sub.PollContinuous();
         var throttle = _quiet ? Math.Min(_sub.Throttle01, 0.25f) : _sub.Throttle01;
         var input = new ShipControlInput(throttle, _quiet, _sub.BoostHeld);
         _sim.Tick(dt, WorldBuilder.ToS(_sub.GlobalPosition), input);
 
-        if (_isCoopHost)
-        {
-            _snapshotTimer += dt;
-            if (_snapshotTimer >= 0.066f)
-            {
-                _snapshotTimer = 0f;
-                BroadcastWorldSnapshot();
-            }
-        }
-        else if (_isCoopClient)
+        if (_isCoopClient)
         {
             // Drill-cancel watcher: the local sim cancelled its drill (undock,
             // out of range, target gone) — tell the host so the remote cut stops.
@@ -529,11 +778,6 @@ public partial class RunController : Node3D
                 SendCoopIntent(IntentType.DrillCancel, string.Empty, _sub.GlobalPosition, 0);
             }
             _lastLocalDrill = drilling;
-            if (_session is not null && !_session.IsActive)
-            {
-                OnHostDisconnected();
-                return;
-            }
         }
 
         if (_sim.Phase == RunPhase.Failed)
@@ -570,6 +814,50 @@ public partial class RunController : Node3D
         SyncLootMarkers();
     }
 
+    /// <summary>
+    /// 15 Hz co-op pacing: host world snapshots (with every ship pose) and the
+    /// final-sequence admission gate; client own-ship poses and the extraction
+    /// request timeout.
+    /// </summary>
+    private void TickCoopNet(float dt)
+    {
+        if (_sim is null) return;
+        if (_isCoopHost)
+        {
+            _snapshotTimer += dt;
+            if (_snapshotTimer >= CoopTickSeconds)
+            {
+                _snapshotTimer = 0f;
+                BroadcastWorldSnapshot();
+                if (!_finalSequenceSignalled && _sim.Phase == RunPhase.Active && _sim.Contract.PrimaryComplete)
+                {
+                    // Extraction final sequence (docs/02 §10): join-in-progress closes.
+                    _finalSequenceSignalled = true;
+                    _session?.SetRunFinalSequence();
+                    GodotLogBridge.Info(GameServices.Logger, "[coop] primary objectives complete: join-in-progress closed.");
+                }
+            }
+        }
+        else if (_isCoopClient)
+        {
+            _poseTimer += dt;
+            if (_poseTimer >= CoopTickSeconds)
+            {
+                _poseTimer = 0f;
+                _link?.SendLocalPose();
+            }
+            if (_extractPending)
+            {
+                _extractPendingAge += dt;
+                if (_extractPendingAge > ExtractPendingTimeoutSeconds)
+                {
+                    _extractPending = false;
+                    _hud?.ShowMessage(Localization.T("No answer from the host — extraction not confirmed. Try again."), 5f);
+                }
+            }
+        }
+    }
+
     private void RefreshHud()
     {
         if (_sim is null || _sub is null || _world is null || _hud is null || _catalog is null) return;
@@ -591,7 +879,9 @@ public partial class RunController : Node3D
         _hud.Sonar.SetObjectiveText(objName.Replace("node.", Localization.T("SITE") + " "));
         // Steady warning banner (no flashing): threat, power, hull, cooldown.
         var warn = "";
-        if (_sim.IsDrilling) warn = Localization.T("DRILL TURNING — {0:F0}s left, 35 PU, hold position (H cancels)", _sim.DrillRemainingSeconds);
+        if (_link is not null && _link.IsReconnecting) warn = Localization.T("HOST LINK LOST — reconnecting ({0:F0}s left)", _link.ReconnectSecondsLeft);
+        else if (_extractPending) warn = Localization.T("EXTRACTION REQUESTED — waiting for host confirmation");
+        else if (_sim.IsDrilling) warn = Localization.T("DRILL TURNING — {0:F0}s left, 35 PU, hold position (H cancels)", _sim.DrillRemainingSeconds);
         else if (_sim.IsDocked) warn = Localization.T("DOCKED — drill (H) or undock (J)");
         else if (_sim.ActiveMajorEvent is not null) warn = MajorEventLabel();
         else if (_sim.Threat > 70f) warn = Localization.T("THREAT HIGH — go quiet (Z) or break contact");
@@ -947,6 +1237,7 @@ public partial class RunController : Node3D
         _sub.GlobalPosition = WorldBuilder.ToG(pos);
         _sub.LinearVelocity = Vector3.Zero;
         _sub.AngularVelocity = Vector3.Zero;
+        _link?.MarkTeleported(); // the host's pose gate allows this one relocation.
         _hud.ShowMessage(Localization.T("Emergency winch fired — back at last safe water."), 4f);
         RefreshHud();
     }
@@ -1013,6 +1304,11 @@ public partial class RunController : Node3D
     private void DoExtract()
     {
         if (_sim is null || _hud is null || _audio is null) return;
+        if (_isCoopClient)
+        {
+            RequestCoopExtraction();
+            return;
+        }
         var result = _sim.TryExtract();
         if (!result.Success || result.Settlement is null)
         {
@@ -1029,6 +1325,36 @@ public partial class RunController : Node3D
         }
         _audio.PlayChime();
         OnRunSucceeded(result.Settlement);
+    }
+
+    /// <summary>
+    /// Client: per-player extraction is host-authorized (docs/02 §9.6). The same
+    /// rules are pre-checked locally for an immediate, localized refusal; the
+    /// host re-validates and answers with a reliable verdict.
+    /// </summary>
+    private void RequestCoopExtraction()
+    {
+        if (_sim is null || _hud is null || _sub is null) return;
+        if (_extractPending)
+        {
+            _hud.ShowMessage(Localization.T("Extraction already requested — waiting for the host."), 3f);
+            return;
+        }
+        if (_link is not null && _link.IsReconnecting)
+        {
+            _hud.ShowMessage(Localization.T("Host link down — extraction needs the host's confirmation."), 4f);
+            return;
+        }
+        var check = _sim.CanAuthorizeRemoteExtraction(_sim.ShipPosition);
+        if (!check.Success)
+        {
+            _hud.ShowMessage(Localization.T("Extraction refused: {0}", (object)Localization.T(check.Reason, check.Args)), 5f);
+            return;
+        }
+        _extractPending = true;
+        _extractPendingAge = 0f;
+        SendCoopIntent(IntentType.Extract, string.Empty, _sub.GlobalPosition, 0);
+        _hud.ShowMessage(Localization.T("Extraction requested — waiting for host confirmation."), 4f);
     }
 
     private LootSpawn? NearestLoot(float maxMeters)
@@ -1151,7 +1477,10 @@ public partial class RunController : Node3D
     private void OnRunFailed()
     {
         if (_ended || _sim is null) return;
-        if (_isCoopHost) BroadcastWorldSnapshot(); // final: clients learn the run ended.
+        BroadcastRunEnd(); // host: final state reaches every client reliably.
+        _link?.StopMonitoring();
+        _link?.SendLocalPose(); // client: last pose carries the Extracted/Failed flag.
+        _extractPending = false;
         _ended = true;
         var draft = _sim.BuildFailureSettlement();
         _audio?.PlayAlarm();
@@ -1167,7 +1496,10 @@ public partial class RunController : Node3D
     private void OnRunSucceeded(RunSettlementDraft draft)
     {
         if (_ended) return;
-        if (_isCoopHost) BroadcastWorldSnapshot(); // final: clients learn the run ended.
+        BroadcastRunEnd(); // host: team extraction reaches every client reliably.
+        _link?.StopMonitoring();
+        _link?.SendLocalPose(); // client: last pose carries the Extracted/Failed flag.
+        _extractPending = false;
         _ended = true;
         _pendingDraft = draft;
         if (_isTutorial)
@@ -1186,6 +1518,11 @@ public partial class RunController : Node3D
     {
         if (_hud is null || _store is null || !IsInstanceValid(this)) return;
         if (_settleInFlight) return; // no parallel retries: one write at a time.
+        var hostLost = draft.Outcome == SettlementOutcome.HostLost;
+        var title = hostLost ? Localization.T("HOST LOST") : failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE");
+        var reasonLine = hostLost
+            ? Localization.T("Host lost: only the last host-confirmed cargo is paid, at the insurance retention.") + "\n"
+            : failed ? Localization.T(_sim!.FailureReason) + "\n" : "";
         // Unsaved session by choice: no write of any kind (settlement or
         // tutorial); the profile file stays byte-identical. Reads stayed
         // allowed, so the run still counts on screen — just not persisted.
@@ -1193,8 +1530,8 @@ public partial class RunController : Node3D
         {
             var choiceNote = Localization.T("Not saved by choice: this unsaved session records nothing to the profile.");
             var tutNote = _isTutorial ? "\n" + Localization.T("Tutorial steps retry next tutorial launch.") : "";
-            _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
-                (failed ? Localization.T(_sim!.FailureReason) + "\n" : "") + Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + choiceNote + tutNote, false);
+            _hud.ShowEnd(title,
+                reasonLine + Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + choiceNote + tutNote, false);
             _hud.SetEndButtons(retryVisible: false, menuEnabled: true);
             GodotLogBridge.Info(GameServices.Logger, $"Settlement {draft.SettlementId} skipped (unsaved session by choice).");
             return;
@@ -1204,8 +1541,8 @@ public partial class RunController : Node3D
         _settleCts = new CancellationTokenSource();
         var ct = _settleCts.Token;
         _saveState = Localization.T("Saving settlement…");
-        _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
-            (failed ? Localization.T(_sim!.FailureReason) + "\n" : "") + Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + _saveState, false);
+        _hud.ShowEnd(title,
+            reasonLine + Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + _saveState, false);
         _hud.SetEndButtons(retryVisible: false, menuEnabled: false); // hold exit until the write lands.
         var payload = new SettlementPayload(draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards,
             Array.Empty<string>(), Array.Empty<string>(), BuildCodexDiscovery(draft, failed),
@@ -1225,7 +1562,7 @@ public partial class RunController : Node3D
                 // Held tutorial write: no timeout fake-claim. Success text
                 // appears only when actually persisted; failures stay visible
                 // and steps retry next tutorial launch.
-                _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+                _hud.ShowEnd(title,
                     Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + note + "\n" + Localization.T("Saving tutorial progress…"), false);
                 var tutOk = await PersistTutorialCompletionAsync(ct);
                 if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
@@ -1235,7 +1572,7 @@ public partial class RunController : Node3D
                 if (tutOk) _hud.ShowMessage(Localization.T("Tutorial complete: The First Ping."), 7f);
             }
             _tutorialEndNote = endNote;
-            _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+            _hud.ShowEnd(title,
                 Localization.T("Settlement {0}: {1} cr, {2} research, {3} shards.", draft.SettlementId, draft.RetainedCredits, draft.ResearchData, draft.Shards) + "\n" + note + endNote, false);
             _hud.SetEndButtons(retryVisible: false, menuEnabled: true);
         }
@@ -1249,7 +1586,7 @@ public partial class RunController : Node3D
             // No fake credit: visible retry keeps the same idempotent id, so a
             // retry can never double-award even across processes.
             GodotLogBridge.Error(GameServices.Logger, $"Settlement save failed [{ex.Code}]: {ex.Message}", ex.Code);
-            _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+            _hud.ShowEnd(title,
                 Localization.T("Settlement {0}: {1} cr pending — save failed [{2}]: {3}\nNothing was credited. Retry when storage is available.", draft.SettlementId, draft.RetainedCredits, (object)ex.Code, ex.Message), true);
             _hud.SetEndButtons(retryVisible: true, menuEnabled: true);
         }
@@ -1257,7 +1594,7 @@ public partial class RunController : Node3D
         {
             if (ct.IsCancellationRequested || !IsInstanceValid(this) || _hud is null || !IsInstanceValid(_hud)) return;
             GodotLogBridge.Error(GameServices.Logger, "Settlement save failed unexpectedly: " + ex.GetType().Name, "SAVE-001");
-            _hud.ShowEnd(failed ? Localization.T("DIVE FAILED") : Localization.T("EXTRACTION COMPLETE"),
+            _hud.ShowEnd(title,
                 Localization.T("Settlement {0}: {1} cr pending — unexpected save fault.\nNothing was credited. Retry when storage is available.", draft.SettlementId, draft.RetainedCredits), true);
             _hud.SetEndButtons(retryVisible: true, menuEnabled: true);
         }
@@ -1295,7 +1632,7 @@ public partial class RunController : Node3D
             {
                 if (_catalog.RelicTraits.ContainsKey(id)) found.Add(id);
             }
-            if (!failed && _catalog.Biomes.ContainsKey(draft.BiomeId))
+            if (draft.Outcome == SettlementOutcome.Success && _catalog.Biomes.ContainsKey(draft.BiomeId))
             {
                 found.Add(draft.BiomeId);
             }
@@ -1353,6 +1690,16 @@ public partial class RunController : Node3D
         catch { }
         finally { _settleCts?.Dispose(); _settleCts = null; }
         if (_sim is not null) _sim.EventRaised -= OnSimEvent;
+        // The session node outlives this scene: detach so it never calls into a freed run.
+        if (_session is not null && IsInstanceValid(_session))
+        {
+            if (_isCoopHost) _session.IntentReceived -= OnCoopIntent;
+            if (_isCoopClient)
+            {
+                _session.SnapshotReceived -= OnCoopSnapshot;
+                _session.EventReceived -= OnCoopEvent;
+            }
+        }
     }
 
     private void ShowFatal(string text)

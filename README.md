@@ -17,16 +17,19 @@ This is a **solo-playable vertical slice** with a full host-authoritative networ
 - **Save system**: local profile with 3-generation atomic rollback and an idempotent settlement ledger.
 - **Diagnostics**: logs folder, support-bundle export, headless smoke tests, deterministic autopilot playback.
 
-### Co-op lobby + shared world sync (live; ship replication is the next batch)
+### Co-op: lobby, shared world, teammate ships, per-player settlement (live)
 - **Multiplayer**: ENet host-authoritative listen server, LAN discovery, Direct-IP join, UPnP port mapping, reconnect grace, host-loss settlement protection — implemented and covered by tests.
 - **Lobby UI**: host a LAN lobby, join by direct IP, or pick a session from LAN discovery; player list with ready states, host contract staging, and a run-manifest broadcast that loads the same deterministic world for every peer.
 - **In-run world sync**: the host's `RunSimulation` is the world authority — a 15 Hz `WorldSnapshot` (loot/node bitmasks, drill state, contract progress, creature states, phase) replicates the shared world, and client interactions (salvage, drill, survey, service, pulse) apply locally as prediction then send `PlayerIntent`s the host re-validates by position. Run end (failed/extracted/host loss) is mirrored to clients.
-- **Honest scope**: ship transform replication is not in yet — each player pilots their own submarine on the shared world, and only the host's extraction is credited (clients see a message). Join-in-progress and reconnect takeover are the next batch.
+- **Teammate submarines**: every player pilots their own sub; clients send their pose at 15 Hz, the host validates it (finite, speed ≤ 60 m/s, in world bounds, reachable, one winch teleport) and republishes all poses in the world snapshot. Remote subs render as collider-less proxies (120 ms interpolation buffer, short extrapolation, large-correction blend, teleport snap) with a name tag, plus teammate markers on the sonar scope. Proxies never push your sub — teammates pass through each other by design.
+- **Per-player extraction**: with the shared objectives done, any player can extract their own sub at the extraction zone (clients are host-authorized); a host extraction extracts the whole team. Every player settles their own draft once through the settlement ledger.
+- **Host loss / reconnect / join-in-progress**: a dropped host opens an 8 s reconnect window (automatic token reconnect, same sub), then host-loss settlement pays only the last host-confirmed cargo at the insurance retention. A dropped client reclaims its seat and ship with its session token (seat held 120 s). The host can open a running dive to late joiners (lobby toggle, off by default) until the extraction final sequence.
+- **Remaining limits**: no host migration; the host's hull loss fails the whole team; creature AI tracks the host's sub; reconnect does not survive a game restart.
 
 ### Not implemented
 - Accessibility features (colorblind sonar palettes, high-contrast HUD, key remapping) — **not present**; do not expect them in this build.
 - 2 of 24 modules have no in-run effect yet and are not purchasable/equippable (heat sink, vector fin).
-- Ship transform replication (each player's submarine position/heading), join-in-progress, reconnect takeover, host-loss settlement.
+- Co-op host migration (host loss ends the dive for clients with a host-loss settlement).
 
 ## Quick Start
 

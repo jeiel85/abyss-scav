@@ -133,7 +133,7 @@ public partial class MainMenu : Control
         var dive = AddMenuButton(column, Localization.T("Solo Dive — Contract & Loadout"), true, Localization.T("Pick waters, contract, and frame, then dive."));
         first = dive;
         dive.Pressed += () => Navigate(AppScene.Loadout, Localization.T("Solo dive requires the contract screen."));
-        var coopButton = AddMenuButton(column, Localization.T("Co-op — Host or Join"), true, Localization.T("Host a LAN lobby, join by direct IP, or pick a session from LAN discovery. The lobby is live; in-run ship replication is a later batch."));
+        var coopButton = AddMenuButton(column, Localization.T("Co-op — Host or Join"), true, Localization.T("Host a LAN lobby, join by direct IP, or pick a session from LAN discovery. Lobby, shared world and teammate submarines are live; a running dive can accept late joiners when the host allows it."));
         coopButton.Pressed += () => Navigate(AppScene.HostOrJoin, Localization.T("Co-op requires the host/join screen."));
         // T0 stays available after completion (replay resumes a complete checklist).
         _tutorialButton = AddMenuButton(column, Localization.T("Tutorial: The First Ping"), true, Localization.T("Guided first dive: fixed waters, contract, seed 4242, and skiff."));
