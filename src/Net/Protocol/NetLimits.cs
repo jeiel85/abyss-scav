@@ -12,7 +12,8 @@ public static class NetLimits
     /// <summary>Total players in a session including the host (docs/02 §1).</summary>
     public const int MaxPeers = 4;
 
-    public const ushort ProtocolVersion = 1;
+    /// <summary>v2: ship poses, reconnect token in the handshake, final-snapshot/extraction events.</summary>
+    public const ushort ProtocolVersion = 2;
 
     /// <summary>
     /// Binary frame header size: u16 + u16 + u32 + u64 + u64 + u16 = 26 bytes.
@@ -33,6 +34,7 @@ public static class NetLimits
     public const int MaxModifiers = 8;
     public const int MaxModifierBytes = 48;
     public const int MaxIdBytes = 64;
+    public const int MaxReconnectTokenBytes = 64;
 
     /// <summary>World snapshot ceilings (docs/02 §9). The world is deterministic
     /// per manifest, so the snapshot matches creatures/loot/nodes by index and
@@ -59,6 +61,16 @@ public static class NetLimits
 
     /// <summary>Host-loss reconnect window before settlement (docs/02 §12, seconds).</summary>
     public const int HostLossWindowSeconds = 8;
+
+    /// <summary>
+    /// A client that has heard the host in-run but receives nothing for this long
+    /// treats the host as lost even before the transport reports it (docs/02 §12).
+    /// The host keeps broadcasting while paused, so only a dead or frozen host trips it.
+    /// </summary>
+    public const int HostSilenceSeconds = 10;
+
+    /// <summary>Ship pose send/broadcast cadence (docs/02 §9.5, Hz). Stays under <see cref="UnreliablePerSecond"/>.</summary>
+    public const int PoseSendHz = 15;
 
     /// <summary>Default join handshake timeout (seconds).</summary>
     public const int JoinTimeoutSeconds = 10;

@@ -2,8 +2,12 @@ using System.Security.Cryptography;
 
 namespace AbyssScav.Protocol;
 
-/// <summary>Host-authoritative lobby knobs synced to every client.</summary>
-public sealed record LobbySettings(string LobbyName, int MaxPlayers, bool JoinAllowed);
+/// <summary>
+/// Host-authoritative lobby knobs synced to every client. <see cref="JoinAllowed"/>
+/// opens the session to new players at all; <see cref="JoinInProgress"/> additionally
+/// lets them join a dive that is already running (docs/02 §10, off by default).
+/// </summary>
+public sealed record LobbySettings(string LobbyName, int MaxPlayers, bool JoinAllowed, bool JoinInProgress = false);
 
 /// <summary>One lobby seat. Identity is the session peer id, never an IP address.</summary>
 public sealed record LobbyPlayer(ulong PeerId, string DisplayName, bool Ready, bool IsHost);
@@ -18,10 +22,20 @@ public sealed class NetworkSessionManager
 {
     private readonly Func<DateTimeOffset> _clock;
     private readonly Dictionary<ulong, LobbyPlayer> _players = new();
+    // Reliable and unreliable frames ride different ENet channels, which may
+    // reorder relative to each other: each channel keeps its own replay window
+    // so a late reliable frame is never dropped behind a newer snapshot/pose.
     private readonly InboundSequenceFilter _sequences = new();
+    private readonly InboundSequenceFilter _unreliableSequences = new();
     private readonly PeerRateLimiter _rates = new();
     private readonly ReconnectTokenStore _tokens;
     private readonly Dictionary<ulong, string> _pendingNames = new();
+
+    // Seats of players who dropped mid-run, held for reconnect takeover while
+    // their token is live (docs/02 §11). Not listed in Players; counted for capacity.
+    private readonly Dictionary<ulong, LobbyPlayer> _reserved = new();
+    private bool _runFinalSequence;
+    private bool _admissionEnded;
 
     private INetworkTransport? _transport;
     private uint _nextSequence = 1;
@@ -42,6 +56,12 @@ public sealed class NetworkSessionManager
     public event Action<ulong, byte[]>? EventReceived;
     public event Action<ulong>? PeerJoined;
     public event Action<ulong>? PeerLeft;
+
+    /// <summary>Host: a dropped player reclaimed its seat (old peer id, new peer id).</summary>
+    public event Action<ulong, ulong>? PeerReconnected;
+
+    /// <summary>Host: an unreliable ship pose from a seated client (sender, payload).</summary>
+    public event Action<ulong, byte[]>? ShipPoseReceived;
     public event Action<NetError>? SessionError;
 
     public bool IsHost { get; private set; }
@@ -54,6 +74,13 @@ public sealed class NetworkSessionManager
     public string? LocalReconnectToken => _localToken;
     public IReadOnlyList<LobbyPlayer> Players => _players.Values
         .OrderBy(p => p.PeerId).ToArray();
+
+    /// <summary>Host: seats held for dropped players inside their reconnect grace.</summary>
+    public IReadOnlyList<LobbyPlayer> ReservedSeats => _reserved.Values
+        .OrderBy(p => p.PeerId).ToArray();
+
+    /// <summary>Host: join-in-progress is closed because the run reached its final extraction sequence.</summary>
+    public bool RunFinalSequence => _runFinalSequence;
 
     /// <summary>Subscribes to a transport. At most one session per manager.</summary>
     public void AttachTransport(INetworkTransport transport)
@@ -97,8 +124,12 @@ public sealed class NetworkSessionManager
 
         _players.Clear();
         _sequences.Clear();
+        _unreliableSequences.Clear();
         _rates.Clear();
         _pendingNames.Clear();
+        _reserved.Clear();
+        _runFinalSequence = false;
+        _admissionEnded = false;
         _tokens.EndRun();
         _players[LocalPeerId] = new LobbyPlayer(LocalPeerId, displayName.Trim(), false, true);
         BroadcastLobby();
@@ -134,14 +165,25 @@ public sealed class NetworkSessionManager
         _running = false;
         _players.Clear();
         _sequences.Clear();
+        _unreliableSequences.Clear();
         _rates.Clear();
+        _reserved.Clear();
         _localToken = null;
+        if (!string.IsNullOrEmpty(reconnectToken) &&
+            System.Text.Encoding.UTF8.GetByteCount(reconnectToken) > NetLimits.MaxReconnectTokenBytes)
+        {
+            throw new ArgumentException("Reconnect token is too long.", nameof(reconnectToken));
+        }
 
         // No ConfigureAwait(false): continuations send on the transport and must
         // stay on the caller's (main-thread, under Godot) context.
         await _transport!.JoinAsync(address, ct);
 
-        var request = new HandshakeRequest(NetLimits.ProtocolVersion, gameVersion, catalogHash, displayName.Trim());
+        // The reconnect token rides in the handshake (protocol v2) so the host can
+        // restore the seat even when the lobby is full or new joins are closed.
+        var request = new HandshakeRequest(
+            NetLimits.ProtocolVersion, gameVersion, catalogHash, displayName.Trim(),
+            string.IsNullOrEmpty(reconnectToken) ? null : reconnectToken);
         Span<byte> payload = stackalloc byte[MessageBounds.MaxPayload(MessageType.HandshakeRequest)];
         if (!HandshakeCodec.TryEncodeRequest(request, payload, out var requestSize))
         {
@@ -178,10 +220,6 @@ public sealed class NetworkSessionManager
         }
 
         _joinTcs = null;
-        if (!string.IsNullOrEmpty(reconnectToken))
-        {
-            SendTokenMessage(MessageType.ReconnectClaim, PeerIds.Broadcast, reconnectToken);
-        }
     }
 
     /// <summary>Client ready toggle; host applies locally. Broadcasts on host.</summary>
@@ -277,8 +315,72 @@ public sealed class NetworkSessionManager
     public void BroadcastSnapshot(ReadOnlySpan<byte> payload) =>
         SendGamePayload(MessageType.Snapshot, PeerIds.Broadcast, payload);
 
+    /// <summary>Host: reliable run event to every seated client.</summary>
+    public void BroadcastEvent(ReadOnlySpan<byte> payload)
+    {
+        RequireActiveSession();
+        if (!IsHost)
+        {
+            throw new InvalidOperationException("Only the host broadcasts run events.");
+        }
+
+        if (payload.Length > MessageBounds.MaxPayload(MessageType.GameEvent))
+        {
+            throw new ArgumentException("Payload exceeds the per-type bound.", nameof(payload));
+        }
+
+        BroadcastFramed(MessageType.GameEvent, payload, TransportChannel.Reliable);
+    }
+
+    /// <summary>Client: unreliable own-ship pose to the host (docs/02 §9.5).</summary>
+    public void SendShipPose(ReadOnlySpan<byte> payload)
+    {
+        if (IsHost)
+        {
+            throw new InvalidOperationException("The host publishes its pose inside the world snapshot.");
+        }
+
+        SendGamePayload(MessageType.ShipPose, HostPeerId, payload);
+    }
+
+    /// <summary>
+    /// Host: the run reached its final extraction sequence (docs/02 §10) —
+    /// join-in-progress closes; reconnect takeover stays open.
+    /// </summary>
+    public void SetRunFinalSequence()
+    {
+        if (IsHost)
+        {
+            _runFinalSequence = true;
+        }
+    }
+
+    /// <summary>
+    /// Host: the run ended. Tokens are discarded (docs/02 §11), held seats are
+    /// released, and neither reconnect nor join-in-progress is admitted again.
+    /// </summary>
+    public void EndRunAdmission()
+    {
+        if (!IsHost)
+        {
+            return;
+        }
+
+        _runFinalSequence = true;
+        _admissionEnded = true;
+        _reserved.Clear();
+        _tokens.EndRun();
+    }
+
     /// <summary>Main-thread pump. Never touches scene state; only raises events.</summary>
-    public void Poll() => _transport?.Poll();
+    public void Poll()
+    {
+        _transport?.Poll();
+        if (IsHost)
+        {
+            ReleaseExpiredSeats();
+        }
+    }
 
     public void Shutdown()
     {
@@ -292,6 +394,9 @@ public sealed class NetworkSessionManager
             _joinTcs = null;
             _players.Clear();
             _pendingNames.Clear();
+            _reserved.Clear();
+            _runFinalSequence = false;
+            _admissionEnded = false;
             _tokens.EndRun();
             SessionId = NetLimits.InvalidId;
             Settings = null;
@@ -362,10 +467,18 @@ public sealed class NetworkSessionManager
     private void OnPeerDisconnected(PeerDisconnectedEvent e)
     {
         _sequences.Forget(e.PeerId);
+        _unreliableSequences.Forget(e.PeerId);
         _rates.Forget(e.PeerId);
         _pendingNames.Remove(e.PeerId);
-        if (IsHost && _players.Remove(e.PeerId))
+        if (IsHost && _players.Remove(e.PeerId, out var seat))
         {
+            // Mid-run drop: hold the seat for reconnect takeover and restart the
+            // token grace from now (docs/02 §11). Lobby drops release the seat.
+            if (_running && !_admissionEnded && _tokens.Refresh(e.PeerId, SessionId))
+            {
+                _reserved[e.PeerId] = seat;
+            }
+
             BroadcastLobby();
             PeerLeft?.Invoke(e.PeerId);
         }
@@ -411,8 +524,9 @@ public sealed class NetworkSessionManager
             return;
         }
 
+        var replayWindow = message.Channel == TransportChannel.Reliable ? _sequences : _unreliableSequences;
         if (SessionId != NetLimits.InvalidId &&
-            NetFrame.ValidateRouted(header, message.SenderPeerId, SessionId, _sequences) != FrameRouteError.None)
+            NetFrame.ValidateRouted(header, message.SenderPeerId, SessionId, replayWindow) != FrameRouteError.None)
         {
             return;
         }
@@ -428,6 +542,12 @@ public sealed class NetworkSessionManager
             return;
         }
 
+        if (IsHost && _players.ContainsKey(message.SenderPeerId))
+        {
+            // Grace is measured from when the peer was last heard (docs/02 §11).
+            _tokens.Refresh(message.SenderPeerId, SessionId);
+        }
+
         Dispatch(header, NetFrame.Payload(message.Payload).ToArray(), message.SenderPeerId);
     }
 
@@ -441,9 +561,26 @@ public sealed class NetworkSessionManager
                 return;
             }
 
+            ReleaseExpiredSeats();
+            var tokenValid = false;
+            var oldPeer = NetLimits.InvalidId;
+            var oldName = string.Empty;
+            if (!string.IsNullOrEmpty(request.ReconnectToken) && !_admissionEnded &&
+                _tokens.TryTakeover(request.ReconnectToken, SessionId, out oldPeer, out oldName))
+            {
+                tokenValid = oldPeer != NetLimits.InvalidId && oldPeer != LocalPeerId;
+            }
+
+            var seatHeld = tokenValid && (_reserved.ContainsKey(oldPeer) || _players.ContainsKey(oldPeer));
+            if (tokenValid && !seatHeld && !HandshakeCodec.IsValidDisplayName(oldName))
+            {
+                tokenValid = false;
+            }
+
             var policy = new HostHandshakePolicy(
-                NetLimits.ProtocolVersion, _hostCatalog, _players.Count, Settings?.MaxPlayers ?? 1,
-                Settings?.JoinAllowed ?? false);
+                NetLimits.ProtocolVersion, _hostCatalog, _players.Count + _reserved.Count, Settings?.MaxPlayers ?? 1,
+                Settings?.JoinAllowed ?? false, _running, _runFinalSequence || _admissionEnded,
+                tokenValid, seatHeld, Settings?.JoinInProgress ?? false);
             var response = HandshakeValidator.Validate(request, policy, SessionId);
             Span<byte> responsePayload = stackalloc byte[MessageBounds.MaxPayload(MessageType.HandshakeResponse)];
             if (HandshakeCodec.TryEncodeResponse(response, responsePayload, out var responseSize))
@@ -457,7 +594,13 @@ public sealed class NetworkSessionManager
                 return;
             }
 
-            if (_players.Count >= (Settings?.MaxPlayers ?? NetLimits.MaxPeers))
+            if (tokenValid)
+            {
+                TakeOverSeat(oldPeer, oldName, sender);
+                return;
+            }
+
+            if (_players.Count + _reserved.Count >= (Settings?.MaxPlayers ?? NetLimits.MaxPeers))
             {
                 return;
             }
@@ -467,6 +610,13 @@ public sealed class NetworkSessionManager
             SendTokenMessage(MessageType.ReconnectToken, sender, token);
             BroadcastLobby();
             PeerJoined?.Invoke(sender);
+            if (_running && ActiveManifest is not null)
+            {
+                // Join-in-progress (docs/02 §10): static manifest first; the next
+                // world snapshot carries the full shared state.
+                SendManifest(sender);
+            }
+
             return;
         }
 
@@ -490,7 +640,7 @@ public sealed class NetworkSessionManager
         switch (header.MessageType)
         {
             case MessageType.LobbyUpdate:
-                if (!IsHost && LobbyCodecs.TryDecodeLobby(payload, out var settings, out var players) &&
+                if (!IsHost && sender == HostPeerId && LobbyCodecs.TryDecodeLobby(payload, out var settings, out var players) &&
                     settings is not null && players is not null)
                 {
                     Settings = settings;
@@ -514,7 +664,7 @@ public sealed class NetworkSessionManager
 
                 break;
             case MessageType.RunManifest:
-                if (!IsHost && RunManifestCodec.TryDecode(payload, out var manifest) && manifest is not null)
+                if (!IsHost && sender == HostPeerId && RunManifestCodec.TryDecode(payload, out var manifest) && manifest is not null)
                 {
                     ActiveManifest = manifest;
                     _running = true;
@@ -523,50 +673,127 @@ public sealed class NetworkSessionManager
 
                 break;
             case MessageType.ReconnectToken:
-                if (!IsHost && LobbyCodecs.TryDecodeToken(payload, out var token))
+                if (!IsHost && sender == HostPeerId && LobbyCodecs.TryDecodeToken(payload, out var token))
                 {
                     _localToken = token;
                 }
 
                 break;
             case MessageType.ReconnectClaim:
-                if (IsHost && LobbyCodecs.TryDecodeToken(payload, out var claim) &&
-                    _tokens.TryTakeover(claim, SessionId, out var oldPeer, out var oldName))
+                // Post-handshake claim by an already-seated peer (the v1 flow, still
+                // honoured): same takeover path as a token in the handshake.
+                if (IsHost && !_admissionEnded && _players.ContainsKey(sender) &&
+                    LobbyCodecs.TryDecodeToken(payload, out var claim) &&
+                    _tokens.TryTakeover(claim, SessionId, out var claimedPeer, out var claimedName) &&
+                    claimedPeer != sender && claimedPeer != LocalPeerId)
                 {
-                    // Take over the previous seat if it still exists; otherwise
-                    // re-add it (disconnect cleans seats immediately, ready resets
-                    // to false so a stale ready can never survive a reconnect).
-                    if (_players.TryGetValue(oldPeer, out var seat))
-                    {
-                        _players.Remove(oldPeer);
-                        _players[sender] = seat with { PeerId = sender };
-                    }
-                    else if (HandshakeCodec.IsValidDisplayName(oldName))
-                    {
-                        _players[sender] = new LobbyPlayer(sender, oldName, false, false);
-                    }
-                    else
-                    {
-                        break;
-                    }
-
-                    _tokens.RevokePeer(oldPeer, SessionId);
-                    var rotated = _tokens.Issue(sender, SessionId, _players[sender].DisplayName);
-                    SendTokenMessage(MessageType.ReconnectToken, sender, rotated);
-                    BroadcastLobby();
-                    PeerJoined?.Invoke(sender);
+                    _players.Remove(sender);
+                    _tokens.RevokePeer(sender, SessionId);
+                    TakeOverSeat(claimedPeer, claimedName, sender);
                 }
 
                 break;
             case MessageType.PlayerIntent:
-                IntentReceived?.Invoke(sender, payload);
+                if (IsHost && _players.ContainsKey(sender))
+                {
+                    IntentReceived?.Invoke(sender, payload);
+                }
+
                 break;
             case MessageType.GameEvent:
-                EventReceived?.Invoke(sender, payload);
+                if (IsHost ? _players.ContainsKey(sender) : sender == HostPeerId)
+                {
+                    EventReceived?.Invoke(sender, payload);
+                }
+
                 break;
             case MessageType.Snapshot:
-                SnapshotReceived?.Invoke(sender, payload);
+                if (!IsHost && sender == HostPeerId)
+                {
+                    SnapshotReceived?.Invoke(sender, payload);
+                }
+
                 break;
+            case MessageType.ShipPose:
+                if (IsHost && _players.ContainsKey(sender))
+                {
+                    ShipPoseReceived?.Invoke(sender, payload);
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Reconnect takeover (docs/02 §11): the new peer inherits the old seat
+    /// (held reservation, a still-listed seat, or — if already released — a fresh
+    /// seat under the token's name) with ready reset, gets a rotated token, and during a run is
+    /// re-sent the manifest so it can resync from the next full world snapshot.
+    /// </summary>
+    private void TakeOverSeat(ulong oldPeer, string oldName, ulong newPeer)
+    {
+        LobbyPlayer seat;
+        if (_reserved.Remove(oldPeer, out var held))
+        {
+            seat = held with { PeerId = newPeer, Ready = false };
+        }
+        else if (_players.Remove(oldPeer, out var listed))
+        {
+            seat = listed with { PeerId = newPeer, Ready = false };
+        }
+        else if (HandshakeCodec.IsValidDisplayName(oldName))
+        {
+            seat = new LobbyPlayer(newPeer, oldName, false, false);
+        }
+        else
+        {
+            return;
+        }
+
+        _players[newPeer] = seat;
+        _tokens.RevokePeer(oldPeer, SessionId);
+        var rotated = _tokens.Issue(newPeer, SessionId, seat.DisplayName);
+        SendTokenMessage(MessageType.ReconnectToken, newPeer, rotated);
+        BroadcastLobby();
+        if (oldPeer != newPeer)
+        {
+            PeerReconnected?.Invoke(oldPeer, newPeer);
+        }
+
+        PeerJoined?.Invoke(newPeer);
+        if (_running && ActiveManifest is not null)
+        {
+            SendManifest(newPeer);
+        }
+    }
+
+    private void SendManifest(ulong peerId)
+    {
+        if (ActiveManifest is null)
+        {
+            return;
+        }
+
+        Span<byte> payload = stackalloc byte[MessageBounds.MaxPayload(MessageType.RunManifest)];
+        if (RunManifestCodec.TryEncode(ActiveManifest, payload, out var size))
+        {
+            SendFramed(MessageType.RunManifest, peerId, SessionId, payload[..size], TransportChannel.Reliable);
+        }
+    }
+
+    private void ReleaseExpiredSeats()
+    {
+        if (_reserved.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var peer in _reserved.Keys.ToArray())
+        {
+            if (!_tokens.IsLive(peer, SessionId))
+            {
+                _reserved.Remove(peer);
+            }
         }
     }
 

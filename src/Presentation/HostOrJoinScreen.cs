@@ -197,7 +197,6 @@ public partial class HostOrJoinScreen : Control
         joinSelected.Pressed += OnJoinSelected;
         lanRow.AddChild(scanButton);
         lanRow.AddChild(joinSelected);
-        content.AddChild(lanRow);
 
         _lanList = new ItemList { CustomMinimumSize = new Vector2(0, 120) };
         content.AddChild(_lanList);

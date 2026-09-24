@@ -12,7 +12,7 @@ public static class DomainConstants
     public const string CatalogVersion = "abyss-scav.catalog/1";
 
     /// <summary>Network protocol version for run manifests (docs/16 §5).</summary>
-    public const ushort ProtocolVersion = 1;
+    public const ushort ProtocolVersion = 2;
 
     /// <summary>Ship must be within this range (meters) to salvage loot.</summary>
     public const float InteractRangeMeters = 15f;

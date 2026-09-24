@@ -12,14 +12,22 @@ public enum HandshakeRejectReason : byte
     JoinClosed = 4,
     NameInvalid = 5,
     Malformed = 6,
+
+    /// <summary>Join-in-progress refused: the run reached its final extraction sequence (docs/02 §10).</summary>
+    RunFinalSequence = 7,
 }
 
-/// <summary>Client -&gt; host handshake (docs/02 §6). Binary, length-capped.</summary>
+/// <summary>
+/// Client -&gt; host handshake (docs/02 §6). Binary, length-capped. A reconnecting
+/// client presents its session-scoped <see cref="ReconnectToken"/> (docs/02 §11)
+/// so the host can restore its seat even when new joins are closed.
+/// </summary>
 public sealed record HandshakeRequest(
     ushort ProtocolVersion,
     string GameVersion,
     string CatalogHash,
-    string DisplayName);
+    string DisplayName,
+    string? ReconnectToken = null);
 
 /// <summary>Host -&gt; client handshake answer with a human-readable reason.
 /// Carries the session id so the client can adopt it for strict frame validation.</summary>
@@ -29,12 +37,25 @@ public sealed record HandshakeResponse(
     ulong SessionId,
     string Message);
 
+/// <summary>
+/// Host admission inputs. <see cref="CurrentPlayers"/> counts connected seats
+/// plus seats reserved for disconnected players inside their reconnect grace.
+/// <see cref="RunInProgress"/>, <see cref="JoinInProgressAllowed"/> (host lobby
+/// setting) and <see cref="RunFinalSequence"/> gate join-in-progress (docs/02 §10); <see cref="ReconnectTokenValid"/> and
+/// <see cref="ReconnectSeatHeld"/> describe a presented reconnect token
+/// (docs/02 §11) as already checked against the token store.
+/// </summary>
 public sealed record HostHandshakePolicy(
     ushort ExpectedProtocol,
     string ExpectedCatalogHash,
     int CurrentPlayers,
     int MaxPlayers,
-    bool JoinAllowed);
+    bool JoinAllowed,
+    bool RunInProgress = false,
+    bool RunFinalSequence = false,
+    bool ReconnectTokenValid = false,
+    bool ReconnectSeatHeld = false,
+    bool JoinInProgressAllowed = false);
 
 public static class HandshakeCodec
 {
@@ -51,7 +72,15 @@ public static class HandshakeCodec
         var game = Encoding.UTF8.GetBytes(request.GameVersion);
         var catalog = Encoding.UTF8.GetBytes(request.CatalogHash);
         var name = Encoding.UTF8.GetBytes(request.DisplayName);
-        var total = 2 + 1 + game.Length + 1 + catalog.Length + 1 + name.Length;
+        var token = string.IsNullOrEmpty(request.ReconnectToken)
+            ? Array.Empty<byte>()
+            : Encoding.UTF8.GetBytes(request.ReconnectToken);
+        if (token.Length > NetLimits.MaxReconnectTokenBytes)
+        {
+            return false;
+        }
+
+        var total = 2 + 1 + game.Length + 1 + catalog.Length + 1 + name.Length + 1 + token.Length;
         if (total > MessageBounds.MaxPayload(MessageType.HandshakeRequest) ||
             destination.Length < total)
         {
@@ -64,6 +93,7 @@ public static class HandshakeCodec
         at = WritePrefixed(destination, at, game);
         at = WritePrefixed(destination, at, catalog);
         at = WritePrefixed(destination, at, name);
+        at = WritePrefixed(destination, at, token);
         written = at;
         return true;
     }
@@ -81,6 +111,7 @@ public static class HandshakeCodec
         if (!TryReadPrefixed(payload, ref at, NetLimits.MaxGameVersionBytes, out var game) ||
             !TryReadPrefixed(payload, ref at, NetLimits.MaxCatalogHashBytes, out var catalog) ||
             !TryReadPrefixed(payload, ref at, NetLimits.MaxDisplayNameBytes, out var name) ||
+            !TryReadPrefixed(payload, ref at, NetLimits.MaxReconnectTokenBytes, out var tokenBytes) ||
             at != payload.Length)
         {
             return false;
@@ -89,11 +120,13 @@ public static class HandshakeCodec
         string gameVersion;
         string catalogHash;
         string displayName;
+        string? reconnectToken;
         try
         {
             gameVersion = Encoding.UTF8.GetString(game);
             catalogHash = Encoding.UTF8.GetString(catalog);
             displayName = Encoding.UTF8.GetString(name);
+            reconnectToken = tokenBytes.Length == 0 ? null : Encoding.UTF8.GetString(tokenBytes);
         }
         catch
         {
@@ -106,7 +139,7 @@ public static class HandshakeCodec
             return false;
         }
 
-        request = new HandshakeRequest(protocol, gameVersion, catalogHash, displayName);
+        request = new HandshakeRequest(protocol, gameVersion, catalogHash, displayName, reconnectToken);
         return true;
     }
 
@@ -242,10 +275,23 @@ public static class HandshakeValidator
                 $"Display name must be 1-{NetLimits.MaxDisplayNameChars} characters.");
         }
 
+        // Reconnect takeover (docs/02 §11): a live token whose seat is still held
+        // restores that seat even when the lobby is full or new joins are closed.
+        if (policy.ReconnectTokenValid && policy.ReconnectSeatHeld)
+        {
+            return new HandshakeResponse(true, HandshakeRejectReason.None, sessionId, "Welcome back. Seat restored.");
+        }
+
         if (policy.CurrentPlayers >= policy.MaxPlayers)
         {
             return Reject(HandshakeRejectReason.JoinClosed,
                 "Lobby is full. Try again when a slot frees up.");
+        }
+
+        if (policy.ReconnectTokenValid)
+        {
+            // Valid token, seat already released: rejoin on a free seat.
+            return new HandshakeResponse(true, HandshakeRejectReason.None, sessionId, "Welcome back.");
         }
 
         if (!policy.JoinAllowed)
@@ -254,7 +300,20 @@ public static class HandshakeValidator
                 "This run is closed to new players right now.");
         }
 
-        return new HandshakeResponse(true, HandshakeRejectReason.None, sessionId, "Welcome aboard.");
+        if (policy.RunInProgress && !policy.JoinInProgressAllowed)
+        {
+            return Reject(HandshakeRejectReason.JoinClosed,
+                "A dive is in progress and the host has not opened it to late joiners.");
+        }
+
+        if (policy.RunInProgress && policy.RunFinalSequence)
+        {
+            return Reject(HandshakeRejectReason.RunFinalSequence,
+                "The run is in its final extraction sequence. Join the next dive.");
+        }
+
+        return new HandshakeResponse(true, HandshakeRejectReason.None, sessionId,
+            policy.RunInProgress ? "Welcome aboard. Joining the dive in progress." : "Welcome aboard.");
     }
 
     private static HandshakeResponse Reject(HandshakeRejectReason reason, string message) =>

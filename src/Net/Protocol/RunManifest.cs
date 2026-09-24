@@ -32,9 +32,9 @@ public static class RunManifestCodec
             manifest.GameVersion, manifest.BiomeId, manifest.ContractId,
             manifest.DifficultyId, manifest.LayoutHash, manifest.CatalogHash,
         };
-        foreach (var part in parts)
+        for (var i = 0; i < parts.Length; i++)
         {
-            if (string.IsNullOrEmpty(part) || Encoding.UTF8.GetByteCount(part) > NetLimits.MaxIdBytes)
+            if (string.IsNullOrEmpty(parts[i]) || Encoding.UTF8.GetByteCount(parts[i]) > FieldCap(i))
             {
                 return false;
             }
@@ -109,7 +109,7 @@ public static class RunManifestCodec
         var fields = new string[6];
         for (var i = 0; i < fields.Length; i++)
         {
-            if (!TryReadString(payload, ref at, NetLimits.MaxIdBytes, out var value))
+            if (!TryReadString(payload, ref at, FieldCap(i), out var value))
             {
                 return false;
             }
@@ -149,6 +149,13 @@ public static class RunManifestCodec
         manifest = new RunManifest(protocol, fields[0], seed, fields[1], fields[2], fields[3], fields[4], fields[5], modifiers);
         return true;
     }
+
+    /// <summary>
+    /// Per-field byte cap in wire order (game version, biome, contract,
+    /// difficulty, layout hash, catalog hash). Hashes are "sha256:" + 64 hex
+    /// (71 bytes), so they use the catalog-hash cap rather than the id cap.
+    /// </summary>
+    private static int FieldCap(int index) => index >= 4 ? NetLimits.MaxCatalogHashBytes : NetLimits.MaxIdBytes;
 
     /// <summary>
     /// Client-side manifest check (docs/02 §8): a layout mismatch fails the join

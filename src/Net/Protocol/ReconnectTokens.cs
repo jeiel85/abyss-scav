@@ -77,6 +77,55 @@ public sealed class ReconnectTokenStore
         return true;
     }
 
+    /// <summary>
+    /// Restarts the grace window of a peer's token (docs/02 §11). The host calls
+    /// this for every accepted frame from a connected peer and once more at
+    /// disconnect, so the 120 s grace is measured from when the peer was last
+    /// seen rather than from when the token was minted. Returns false when the
+    /// peer has no live token in this session.
+    /// </summary>
+    public bool Refresh(ulong peerId, ulong sessionId)
+    {
+        foreach (var entry in _tokens.Values)
+        {
+            if (entry.PeerId == peerId && entry.SessionId == sessionId)
+            {
+                entry.Expires = _clock().AddSeconds(NetLimits.ReconnectGraceSeconds);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>True while the peer holds an unexpired token in this session; expired entries are dropped.</summary>
+    public bool IsLive(ulong peerId, ulong sessionId)
+    {
+        string? expired = null;
+        foreach (var (token, entry) in _tokens)
+        {
+            if (entry.PeerId != peerId || entry.SessionId != sessionId)
+            {
+                continue;
+            }
+
+            if (_clock() > entry.Expires)
+            {
+                expired = token;
+                break;
+            }
+
+            return true;
+        }
+
+        if (expired is not null)
+        {
+            _tokens.Remove(expired);
+        }
+
+        return false;
+    }
+
     public void RevokePeer(ulong peerId, ulong sessionId)
     {
         string? found = null;
