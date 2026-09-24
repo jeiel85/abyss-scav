@@ -47,6 +47,12 @@ public static class DomainConstants
     /// <summary>Base active-pulse cooldown in seconds.</summary>
     public const float PulseBaseCooldownSeconds = 8f;
 
+    /// <summary>Engine power-draw multiplier while boosting (stock; heat sink lowers it).</summary>
+    public const float BoostPowerMult = 1.5f;
+
+    /// <summary>Engine noise multiplier while boosting (stock; heat sink lowers it).</summary>
+    public const float BoostNoiseMult = 1.3f;
+
     /// <summary>
     /// Flat per-run departure cost (credits) used as the docs/05 §4 insurance
     /// pricing basis. The player never pays this fee directly — runs launch free —

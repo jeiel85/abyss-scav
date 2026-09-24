@@ -4,6 +4,16 @@ All notable changes to AbyssScav will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Modules 24/24**: Vector Fin (yaw/pitch torque x1.4, sway thrust x1.3) and Heat Sink (boost power draw x1.5 → x1.2, boost noise x1.3 → x1.1) now have real in-run effects and are purchasable/equippable.
+- Korean translations for all module descriptions; the i18n gate now covers `ModuleLoadout.Describe` texts.
+
+### Fixed
+- Overdrive Thruster (x1.45) and Emergency Reverse (x1.5) thrust bonuses were clamped to x1.0 by the physical submarine controller, so they had no physical effect.
+- Emergency Reverse only sampled hull integrity at spawn; the thrust burst now engages live when hull drops below 30%.
+
 ## [0.1.0] - 2026-09-17
 
 ### Added

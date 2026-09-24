@@ -570,6 +570,24 @@ public sealed class RunSimulation
     /// </summary>
     public float EngineThrustMultiplier => _loadout.EngineThrustMult * (HullIntegrity < MaxHull * 0.3f ? _loadout.EmergencyThrustMult : 1f);
 
+    /// <summary>
+    /// Yaw/pitch torque multiplier from loadout (1.4 with the vector fin, else 1).
+    /// Presentation applies this to physical turning torque.
+    /// </summary>
+    public float TurnTorqueMultiplier => _loadout.TurnTorqueMult;
+
+    /// <summary>
+    /// Sway (lateral) thrust multiplier from loadout (1.3 with the vector fin,
+    /// else 1). Stacks with <see cref="EngineThrustMultiplier"/>; quiet cap applies.
+    /// </summary>
+    public float SwayThrustMultiplier => _loadout.SwayThrustMult;
+
+    /// <summary>Engine power-draw multiplier while boosting (1.5 stock, 1.2 with the heat sink).</summary>
+    public float BoostPowerMultiplier => _loadout.BoostPowerMult;
+
+    /// <summary>Engine noise multiplier while boosting (1.3 stock, 1.1 with the heat sink).</summary>
+    public float BoostNoiseMultiplier => _loadout.BoostNoiseMult;
+
     /// <summary>Available power supply in PU (after reactor dips).</summary>
     public float PowerSupply { get; private set; }
 
@@ -953,7 +971,7 @@ public sealed class RunSimulation
         PowerSupply = Math.Max(0f, supply);
 
         var demand = 15f; // life support (protected, never shed)
-        demand += 10f + 35f * thr * (input.Boost ? 1.5f : 1f);
+        demand += 10f + 35f * thr * (input.Boost ? _loadout.BoostPowerMult : 1f);
         demand += Math.Min(30f, 5f + 8f * floodedCount);
         if (_burstTimer > 0f) demand += 20f;
         if (_weldTimer > 0f) demand += 25f;
@@ -975,7 +993,7 @@ public sealed class RunSimulation
         BrownoutActive = brownout;
 
         // Noise.
-        var engineTerm = (8f + 45f * thr * (input.Boost ? 1.3f : 1f)) * _frame.NoiseFactor * _loadout.EngineNoiseMult;
+        var engineTerm = (8f + 45f * thr * (input.Boost ? _loadout.BoostNoiseMult : 1f)) * _frame.NoiseFactor * _loadout.EngineNoiseMult;
         _noiseSpike = Math.Max(0f, _noiseSpike - 18f * dt);
         var target = engineTerm + _noiseSpike;
         if (_drillLootSpawnId is not null && !_drillRemote) target += 18f; // drill bit + cuttings pump.

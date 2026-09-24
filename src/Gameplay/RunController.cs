@@ -202,9 +202,7 @@ public partial class RunController : Node3D
     private void SpawnSub(GeneratedWorld world)
     {
         _sub = new SubmarineController { Name = "Submarine", QuietMode = _quiet };
-        // Physical thrust follows the domain loadout (quiet prop x0.85); the
-        // quiet-running cap in the controller still applies on top.
-        _sub.ThrustMultiplier = _sim?.EngineThrustMultiplier ?? 1f;
+        SyncLoadoutHandling();
         AddChild(_sub);
         var start = WorldBuilder.ToG(world.GetNode(world.ExtractionNodeId).Position);
         _sub.GlobalPosition = start + new Vector3(0f, 2f, 12f);
@@ -498,6 +496,19 @@ public partial class RunController : Node3D
         }
     }
 
+    /// <summary>
+    /// Pushes the domain loadout's physical handling onto the submarine. Runs
+    /// every physics tick because the emergency-reverse burst depends on live
+    /// hull integrity; the quiet-running cap in the controller still applies.
+    /// </summary>
+    private void SyncLoadoutHandling()
+    {
+        if (_sub is null) return;
+        _sub.ThrustMultiplier = _sim?.EngineThrustMultiplier ?? 1f;
+        _sub.TurnMultiplier = _sim?.TurnTorqueMultiplier ?? 1f;
+        _sub.SwayMultiplier = _sim?.SwayThrustMultiplier ?? 1f;
+    }
+
     public override void _PhysicsProcess(double delta)
     {
         if (_sim is null || _sub is null || _world is null || _hud is null || _paused || _ended)
@@ -509,6 +520,7 @@ public partial class RunController : Node3D
         var throttle = _quiet ? Math.Min(_sub.Throttle01, 0.25f) : _sub.Throttle01;
         var input = new ShipControlInput(throttle, _quiet, _sub.BoostHeld);
         _sim.Tick(dt, WorldBuilder.ToS(_sub.GlobalPosition), input);
+        SyncLoadoutHandling();
 
         if (_isCoopHost)
         {

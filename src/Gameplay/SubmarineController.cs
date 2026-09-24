@@ -31,11 +31,25 @@ public partial class SubmarineController : RigidBody3D
     public bool QuietMode { get; set; }
 
     /// <summary>
-    /// Loadout thrust multiplier (1.0 stock; 0.85 with the quiet prop). Applied
-    /// to physical thruster forces below the quiet-running cap, which still
-    /// applies on top. Set by RunController from the domain loadout each run.
+    /// Loadout thrust multiplier (1.0 stock; 0.85 quiet prop, 1.45 overdrive,
+    /// x1.5 emergency reverse below 30% hull). Applied to physical thruster
+    /// forces; the quiet-running cap still applies on top. Kept in sync by
+    /// RunController every physics tick from the domain loadout.
     /// </summary>
     public float ThrustMultiplier { get; set; } = 1f;
+
+    /// <summary>Loadout yaw/pitch torque multiplier (1.0 stock; 1.4 with the vector fin).</summary>
+    public float TurnMultiplier { get; set; } = 1f;
+
+    /// <summary>Loadout sway thrust multiplier (1.0 stock; 1.3 with the vector fin).</summary>
+    public float SwayMultiplier { get; set; } = 1f;
+
+    /// <summary>
+    /// Physical sanity bounds for loadout multipliers: the strongest stock
+    /// stack is overdrive x emergency reverse (1.45 x 1.5 = 2.175).
+    /// </summary>
+    public const float MinLoadoutMultiplier = 0.1f;
+    public const float MaxLoadoutMultiplier = 2.5f;
 
     /// <summary>
     /// Test-only autopilot: desired world-space velocity. Null in production;
@@ -190,7 +204,9 @@ public partial class SubmarineController : RigidBody3D
         yaw = Math.Clamp(yaw, -1f, 1f);
         pitch = Math.Clamp(pitch, -1f, 1f);
         var quietScale = QuietMode ? 0.25f : 1.0f;
-        var thrustMult = Math.Clamp(ThrustMultiplier, 0.1f, 1f);
+        var thrustMult = Math.Clamp(ThrustMultiplier, MinLoadoutMultiplier, MaxLoadoutMultiplier);
+        var swayMult = Math.Clamp(SwayMultiplier, MinLoadoutMultiplier, MaxLoadoutMultiplier);
+        var turnMult = Math.Clamp(TurnMultiplier, MinLoadoutMultiplier, MaxLoadoutMultiplier);
         BoostHeld = !QuietMode && (Input.IsActionPressed("abyss_boost") || TestBoost);
         var boostMul = BoostHeld ? 1.6f : 1.0f;
 
@@ -199,12 +215,12 @@ public partial class SubmarineController : RigidBody3D
             QuietMode ? 0.25f : 1.0f);
 
         var basis = state.Transform.Basis;
-        var force = (basis.Z * -fwd * SurgeForce + basis.X * sway * SwayForce + basis.Y * heave * HeaveForce) * boostMul * quietScale * thrustMult;
+        var force = (basis.Z * -fwd * SurgeForce + basis.X * sway * SwayForce * swayMult + basis.Y * heave * HeaveForce) * boostMul * quietScale * thrustMult;
         LastForceLocal = new Vector3(sway, heave, fwd);
         LastAppliedForce = force;
         state.ApplyCentralForce(force);
 
-        var torque = basis.Y * yaw * YawTorque + basis.X * pitch * PitchTorque;
+        var torque = (basis.Y * yaw * YawTorque + basis.X * pitch * PitchTorque) * turnMult;
         // Gentle auto-level: counter roll and residual pitch when idle.
         var up = basis.Y;
         var rollError = up.Cross(Vector3.Up);
@@ -231,7 +247,7 @@ public partial class SubmarineController : RigidBody3D
     {
         BoostHeld = !QuietMode && TestBoost;
         var quietScale = QuietMode ? 0.25f : 1.0f;
-        var thrustMult = Math.Clamp(ThrustMultiplier, 0.1f, 1f);
+        var thrustMult = Math.Clamp(ThrustMultiplier, MinLoadoutMultiplier, MaxLoadoutMultiplier);
         var cap = SurgeForce * 1.2f * quietScale * thrustMult * (BoostHeld ? 1.6f : 1.0f);
         var dv = desired - state.LinearVelocity;
         var force = dv * Mass * 1.5f;

@@ -5,7 +5,7 @@ namespace AbyssScav.Domain.Tests;
 
 /// <summary>
 /// Module loadout: precise numeric baseline-vs-equipped checks per supported
-/// module, plus rejection of duplicates/unsupported/unknown/unowned IDs and
+/// module, plus rejection of duplicates/category collisions/unknown/unowned IDs and
 /// deterministic empty-default behavior.
 /// </summary>
 internal static class ModuleLoadoutTests
@@ -318,23 +318,76 @@ internal static class ModuleLoadoutTests
             TestAssert.True(result.Reason.Contains("No EMP coil", StringComparison.Ordinal), "reason: " + result.Reason);
         });
 
-        Case("twenty-two modules supported, two honest holdouts", () =>
+        Case("vector fin sharpens turning and sway, no surge change", () =>
         {
-            TestAssert.Equal(22, ModuleLoadout.SupportedIds.Count, "22 implemented modules");
-            foreach (var holdout in new[] { "module.engine.heat_sink", "module.engine.vector_fin" })
+            var fx = ModuleLoadout.Resolve(new[] { ModuleLoadout.VectorFin });
+            TestAssert.Equal(1.4f, fx.TurnTorqueMult, "turn torque x1.4");
+            TestAssert.Equal(1.3f, fx.SwayThrustMult, "sway thrust x1.3");
+            var world = DomainSetup.World(catalog, 123UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var finned = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.VectorFin });
+            TestAssert.Equal(1f, stock.TurnTorqueMultiplier, "stock turn torque");
+            TestAssert.Equal(1f, stock.SwayThrustMultiplier, "stock sway thrust");
+            TestAssert.Equal(1.4f, finned.TurnTorqueMultiplier, "sim exposes turn torque x1.4");
+            TestAssert.Equal(1.3f, finned.SwayThrustMultiplier, "sim exposes sway thrust x1.3");
+            TestAssert.Equal(stock.EngineThrustMultiplier, finned.EngineThrustMultiplier, "surge thrust untouched");
+            TestAssert.Equal(stock.EngineNoiseMultiplier, finned.EngineNoiseMultiplier, "engine noise untouched");
+        });
+
+        Case("heat sink trims boost power draw and boost noise only", () =>
+        {
+            var fx = ModuleLoadout.Resolve(new[] { ModuleLoadout.HeatSink });
+            TestAssert.Equal(1.2f, fx.BoostPowerMult, "boost power x1.2");
+            TestAssert.Equal(1.1f, fx.BoostNoiseMult, "boost noise x1.1");
+            var world = DomainSetup.World(catalog, 124UL, "biome.shelf_graveyard", "contract.salvage_quota");
+            var stock = DomainSetup.Sim(catalog, world);
+            var cooled = DomainSetup.Sim(catalog, world, modules: new[] { ModuleLoadout.HeatSink });
+            TestAssert.Equal(DomainConstants.BoostPowerMult, stock.BoostPowerMultiplier, "stock boost power");
+            TestAssert.Equal(DomainConstants.BoostNoiseMult, stock.BoostNoiseMultiplier, "stock boost noise");
+
+            // Cruising (no boost): identical power and noise.
+            var cruise = new ShipControlInput(1f, false, false);
+            for (var i = 0; i < 20; i++)
             {
-                TestAssert.False(ModuleLoadout.IsSupported(holdout), $"{holdout} still unsupported");
-                TestAssert.Equal(-1, ModuleLoadout.PurchasableCostOf(catalog, holdout), $"{holdout} not purchasable");
+                stock.Tick(0.5f, stock.ShipPosition, cruise);
+                cooled.Tick(0.5f, cooled.ShipPosition, cruise);
+            }
+            TestAssert.Equal(stock.PowerDemand, cooled.PowerDemand, "cruise demand identical");
+            TestAssert.Equal(stock.Noise, cooled.Noise, "cruise noise identical");
+
+            // Boosting: demand drops by exactly 35 PU x (1.5 - 1.2), noise settles lower.
+            var boost = new ShipControlInput(1f, false, true);
+            for (var i = 0; i < 40; i++)
+            {
+                stock.Tick(0.5f, stock.ShipPosition, boost);
+                cooled.Tick(0.5f, cooled.ShipPosition, boost);
+            }
+            TestAssert.True(Math.Abs((stock.PowerDemand - cooled.PowerDemand) - 35f * 0.3f) < 0.01f,
+                $"boost demand stock {stock.PowerDemand:F2} vs heat sink {cooled.PowerDemand:F2}");
+            TestAssert.True(cooled.Noise < stock.Noise - 5f, $"boost noise heat sink {cooled.Noise:F1} vs stock {stock.Noise:F1}");
+            TestAssert.Equal(1f, cooled.EngineNoiseMultiplier, "base engine noise untouched");
+        });
+
+        Case("all twenty-four catalog modules supported", () =>
+        {
+            TestAssert.Equal(24, ModuleLoadout.SupportedIds.Count, "24 implemented modules");
+            TestAssert.Equal(catalog.Modules.Count, ModuleLoadout.SupportedIds.Count, "every catalog module has an effect");
+            foreach (var id in catalog.Modules.Keys)
+            {
+                TestAssert.True(ModuleLoadout.IsSupported(id), $"{id} supported");
             }
             foreach (var id in ModuleLoadout.SupportedIds)
             {
+                TestAssert.True(catalog.Modules.ContainsKey(id), $"{id} exists in catalog");
                 TestAssert.True(ModuleLoadout.PurchasableCostOf(catalog, id) > 0, $"{id} purchasable");
                 TestAssert.False(ModuleLoadout.Describe(id).StartsWith("No implemented", StringComparison.Ordinal), $"{id} described");
                 TestAssert.False(ModuleLoadout.EffectKey(id) == "fx=none", $"{id} has effect key");
             }
+            TestAssert.False(ModuleLoadout.IsSupported("module.nope.ghost"), "unknown id unsupported");
+            TestAssert.Equal(-1, ModuleLoadout.PurchasableCostOf(catalog, "module.nope.ghost"), "unknown id not purchasable");
         });
 
-        Case("duplicates, category collisions, unsupported, unknown rejected", () =>
+        Case("duplicates, category collisions, unknown, unowned rejected", () =>
         {
             var world = DomainSetup.World(catalog, 108UL, "biome.shelf_graveyard", "contract.salvage_quota");
             var owned = ModuleLoadout.SupportedIds.ToList();
@@ -347,9 +400,9 @@ internal static class ModuleLoadoutTests
                 new[] { ModuleLoadout.WhisperPulse, ModuleLoadout.PassiveBooster }, null), "same-category pair rejected");
             TestAssert.True(catReason.Contains("one module", StringComparison.Ordinal), "category reason: " + catReason);
             TestAssert.False(RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff",
-                null, RunSimulation.InsuranceNone, out _, out var unsupReason,
-                new[] { "module.engine.heat_sink" }, null), "unsupported catalog module rejected");
-            TestAssert.True(unsupReason.Contains("no implemented in-run effect", StringComparison.Ordinal), "unsupported reason: " + unsupReason);
+                null, RunSimulation.InsuranceNone, out _, out var engineReason,
+                new[] { ModuleLoadout.HeatSink, ModuleLoadout.VectorFin }, null), "two engine modules rejected");
+            TestAssert.True(engineReason.Contains("one module", StringComparison.Ordinal), "engine slot reason: " + engineReason);
             TestAssert.False(RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff",
                 null, RunSimulation.InsuranceNone, out _, out var unknownReason,
                 new[] { "module.nope.ghost" }, null), "unknown id rejected");

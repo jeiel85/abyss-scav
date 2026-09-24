@@ -3,10 +3,9 @@ namespace AbyssScav.Domain;
 /// <summary>
 /// Centralized field-module loadout policy (single-player only).
 /// <para>
-/// Exactly 22 of the 24 catalog modules have real, implemented in-run effects;
-/// the remaining 2 (heat sink, vector fin) are catalog data only (purchase/equip
-/// unavailable until their effects exist — owned copies are retained, never
-/// deleted or charged). One slot per category (Sonar / Engine / Hull / Utility):
+/// All 24 catalog modules have real, implemented in-run effects. A catalog
+/// module without an effect entry here stays unavailable for purchase/equip
+/// (owned copies are retained, never deleted or charged). One slot per category (Sonar / Engine / Hull / Utility):
 /// at most one equipped module per category. Blueprints are permanent unlocks:
 /// equipping never consumes them, and the domain never mutates the profile.
 /// </para>
@@ -79,7 +78,13 @@ public static class ModuleLoadout
     /// <summary>One EMP charge; fired, creatures within 120 m are stunned for 6 s.</summary>
     public const string EmpCoil = "module.utility.emp_coil";
 
-    /// <summary>Every module ID with an implemented in-run effect (exactly 22).</summary>
+    /// <summary>Yaw/pitch torque x1.4 and sway thrust x1.3 (tighter handling). No surge change.</summary>
+    public const string VectorFin = "module.engine.vector_fin";
+
+    /// <summary>Boost power premium x1.5 -> x1.2 and boost noise premium x1.3 -> x1.1.</summary>
+    public const string HeatSink = "module.engine.heat_sink";
+
+    /// <summary>Every module ID with an implemented in-run effect (all 24 catalog modules).</summary>
     public static readonly IReadOnlySet<string> SupportedIds = new HashSet<string>(StringComparer.Ordinal)
     {
         WhisperPulse, PassiveBooster, QuietProp, ReinforcedRib, PressureSkin, SalvageMagnet, EmergencyBuoy,
@@ -87,6 +92,7 @@ public static class ModuleLoadout
         OverdriveThruster, CavitationDampener, EmergencyReverse,
         AbyssPlating, FloodBulkhead, SelfSealingFoam, ShockBuffer,
         DrillArm, RepairDrone, DecoyLauncher, EmpCoil,
+        VectorFin, HeatSink,
     };
 
     /// <summary>Resolved numeric effects of a validated loadout. All multipliers default to neutral.</summary>
@@ -108,7 +114,11 @@ public static class ModuleLoadout
         float PumpRateBonus,
         float CreatureDamageMult,
         float DrillDurationMult,
-        float HullRegenPerSecond);
+        float HullRegenPerSecond,
+        float TurnTorqueMult,
+        float SwayThrustMult,
+        float BoostPowerMult,
+        float BoostNoiseMult);
 
     private static readonly LoadoutEffects Neutral = new(
         PulseRangeMult: 1f,
@@ -128,7 +138,11 @@ public static class ModuleLoadout
         PumpRateBonus: 0f,
         CreatureDamageMult: 1f,
         DrillDurationMult: 1f,
-        HullRegenPerSecond: 0f);
+        HullRegenPerSecond: 0f,
+        TurnTorqueMult: 1f,
+        SwayThrustMult: 1f,
+        BoostPowerMult: DomainConstants.BoostPowerMult,
+        BoostNoiseMult: DomainConstants.BoostNoiseMult);
 
     /// <summary>True when the module has an implemented in-run effect.</summary>
     public static bool IsSupported(string moduleId) =>
@@ -174,6 +188,8 @@ public static class ModuleLoadout
             RepairDrone => "Repair drone: hull regen 2/s while no compartment is flooding.",
             DecoyLauncher => "Decoy launcher: two charges; launched at your position, creatures within 300 m investigate it for 20 s.",
             EmpCoil => "EMP coil: one charge; fired, creatures within 120 m are stunned for 6 s (no movement, no strikes).",
+            VectorFin => "Vector fin: yaw/pitch torque x1.4, sway thrust x1.3. Tighter turns and strafes; no top-speed change.",
+            HeatSink => "Heat sink: boost power draw x1.5 -> x1.2, boost noise x1.3 -> x1.1. Cooler, quieter bursts.",
             _ => "No implemented in-run effect: unavailable for new purchase/equip (owned copies retained).",
         };
     }
@@ -208,6 +224,8 @@ public static class ModuleLoadout
             RepairDrone => "fx=hull_regen_2_not_flooding",
             DecoyLauncher => "fx=decoy_2_charges_300m_20s",
             EmpCoil => "fx=emp_1_charge_120m_stun_6s",
+            VectorFin => "fx=turn_x1.4_sway_x1.3",
+            HeatSink => "fx=boost_power_x1.2_noise_x1.1",
             _ => "fx=none",
         };
     }
@@ -307,6 +325,8 @@ public static class ModuleLoadout
                 ShockBuffer => fx with { CreatureDamageMult = 0.7f },
                 DrillArm => fx with { DrillDurationMult = 0.625f },
                 RepairDrone => fx with { HullRegenPerSecond = 2f },
+                VectorFin => fx with { TurnTorqueMult = 1.4f, SwayThrustMult = 1.3f },
+                HeatSink => fx with { BoostPowerMult = 1.2f, BoostNoiseMult = 1.1f },
                 _ => fx,
             };
         }
