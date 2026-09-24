@@ -29,6 +29,7 @@ public sealed class EnetTransport : INetworkTransport, IDisposable
     private readonly Queue<NetMessage> _inbox = new();
     private TaskCompletionSource<bool>? _joinTcs;
     private bool _joinSeenConnected;
+    private bool _serverLossRaised;
     private bool _subscribed;
     private bool _disposed;
 
@@ -137,6 +138,7 @@ public sealed class EnetTransport : INetworkTransport, IDisposable
         IsHost = false;
         LocalPeerId = NetLimits.InvalidId;
         _joinSeenConnected = false;
+        _serverLossRaised = false;
         AssignToMultiplayer();
         _joinTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var timeout = new CancellationTokenSource(address.EffectiveJoinTimeout);
@@ -217,6 +219,16 @@ public sealed class EnetTransport : INetworkTransport, IDisposable
         {
             MessageReceived?.Invoke(_inbox.Dequeue());
         }
+
+        // Client-side server loss (docs/02 §12): the engine does not guarantee a
+        // peer_disconnected(1) when the server vanishes, so a joined client that
+        // observes its connection drop reports the host exactly once itself.
+        if (!IsHost && _joinTcs is null && _joinSeenConnected && !_serverLossRaised &&
+            status == MultiplayerPeer.ConnectionStatus.Disconnected)
+        {
+            _serverLossRaised = true;
+            PeerDisconnected?.Invoke(new PeerDisconnectedEvent(1, "server-lost"));
+        }
     }
 
     public void Shutdown()
@@ -227,6 +239,7 @@ public sealed class EnetTransport : INetworkTransport, IDisposable
         IsHost = false;
         LocalPeerId = NetLimits.InvalidId;
         _joinSeenConnected = false;
+        _serverLossRaised = false;
     }
 
     public void Dispose()
@@ -331,6 +344,16 @@ public sealed class EnetTransport : INetworkTransport, IDisposable
         if (id <= 0)
         {
             return;
+        }
+
+        if (!IsHost && id == 1)
+        {
+            if (_serverLossRaised)
+            {
+                return;
+            }
+
+            _serverLossRaised = true;
         }
 
         PeerDisconnected?.Invoke(new PeerDisconnectedEvent((ulong)id, "peer-disconnected"));

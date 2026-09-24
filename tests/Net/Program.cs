@@ -10,6 +10,7 @@ var suites = new (string Suite, Func<int> Run)[]
     ("Manifest", ManifestTests.Run),
     ("Lobby", LobbyTests.Run),
     ("WorldSnapshot", WorldSnapshotTests.Run),
+    ("CoopSession", CoopSessionTests.Run),
 };
 
 var totalFail = 0;

@@ -4,6 +4,6 @@ namespace AbyssScav.Foundation;
 public static class GameVersion
 {
     public const string Current = "0.1.0-a01";
-    public const ushort ProtocolVersion = 1;
+    public const ushort ProtocolVersion = 2;
     public const int SaveSchemaVersion = 1;
 }

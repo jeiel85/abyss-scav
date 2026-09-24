@@ -12,6 +12,7 @@ var suites = new (string Suite, Func<int> Run)[]
     ("Consumables", ConsumableTests.Run),
     ("Events", EventTests.Run),
     ("CoopSync", CoopSyncTests.Run),
+    ("CoopShips", CoopShipTests.Run),
 };
 
 var totalFail = 0;

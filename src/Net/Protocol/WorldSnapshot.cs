@@ -7,7 +7,8 @@ namespace AbyssScav.Protocol;
 /// per manifest (LayoutHash-verified on join), so creatures and loot are matched
 /// by index and loot/node state travels as compact bitmasks. Ship-local state
 /// (hull, pressure, power, sonar, dock) is deliberately absent: each player's
-/// sim owns its own ship.
+/// sim owns its own ship. Ship <em>transforms</em> travel in <see cref="Ships"/>
+/// purely for rendering remote proxies (protocol v2).
 /// </summary>
 public sealed record WorldSnapshot(
     ulong SessionId,
@@ -23,7 +24,12 @@ public sealed record WorldSnapshot(
     float ObserveSeconds,
     int DrillLootIndex,
     float DrillElapsedSeconds,
-    IReadOnlyList<CreatureWire> Creatures);
+    IReadOnlyList<CreatureWire> Creatures,
+    IReadOnlyList<ShipPoseWire>? Ships = null)
+{
+    /// <summary>Every player's latest host-validated ship pose (docs/02 §9.5); never null after decode.</summary>
+    public IReadOnlyList<ShipPoseWire> ShipList => Ships ?? Array.Empty<ShipPoseWire>();
+}
 
 /// <summary>Per-creature wire state, index-aligned with the local world's creatures.</summary>
 public sealed record CreatureWire(
@@ -45,9 +51,18 @@ public static class WorldSnapshotCodec
         written = 0;
         if (snap.SalvagedLootMask is null || snap.SalvagedLootMask.Length > MaxLootMaskBytes ||
             snap.ServicedNodesMask is null || snap.ServicedNodesMask.Length > MaxNodeMaskBytes ||
-            snap.Creatures is null || snap.Creatures.Count > NetLimits.MaxCreatures)
+            snap.Creatures is null || snap.Creatures.Count > NetLimits.MaxCreatures ||
+            snap.ShipList.Count > NetLimits.MaxPeers)
         {
             return false;
+        }
+
+        foreach (var ship in snap.ShipList)
+        {
+            if (ship is null || !ShipPoseCodec.IsWellFormed(ship))
+            {
+                return false;
+            }
         }
 
         if (snap.FailureReason is not null && Encoding.UTF8.GetByteCount(snap.FailureReason) > NetLimits.MaxReasonBytes)
@@ -66,6 +81,7 @@ public static class WorldSnapshotCodec
         total += 1 + (snap.FailureReason is null ? 0 : Encoding.UTF8.GetByteCount(snap.FailureReason));
         total += 1 + (snap.MajorEventId is null ? 0 : Encoding.UTF8.GetByteCount(snap.MajorEventId));
         total += 1 + snap.Creatures.Count * 25;
+        total += 1 + snap.ShipList.Count * ShipPoseCodec.PoseBytes;
         if (total > MessageBounds.MaxPayload(MessageType.Snapshot) || destination.Length < total)
         {
             return false;
@@ -115,6 +131,12 @@ public static class WorldSnapshotCodec
             at += 4;
         }
 
+        destination[at++] = (byte)snap.ShipList.Count;
+        foreach (var ship in snap.ShipList)
+        {
+            ShipPoseCodec.Write(destination, ref at, ship);
+        }
+
         written = at;
         return true;
     }
@@ -122,8 +144,8 @@ public static class WorldSnapshotCodec
     public static bool TryDecode(ReadOnlySpan<byte> payload, out WorldSnapshot? snap)
     {
         snap = null;
-        // Fixed fields + the two non-empty mask payloads (lootLen/nodeLen ≥ 1).
-        if (payload.Length < 8 + 1 + 1 + 1 + 4 + 4 + 1 + 1 + 1 + 1 + 4 + 4 + 4 + 4 + 4 + 1)
+        // Fixed fields + the two non-empty mask payloads (lootLen/nodeLen ≥ 1) + ship count.
+        if (payload.Length < 8 + 1 + 1 + 1 + 4 + 4 + 1 + 1 + 1 + 1 + 4 + 4 + 4 + 4 + 4 + 1 + 1)
         {
             return false;
         }
@@ -197,13 +219,35 @@ public static class WorldSnapshotCodec
             creatures[i] = new CreatureWire(x, y, z, state, stateTime, stunned, exposed);
         }
 
+        if (at >= payload.Length)
+        {
+            return false;
+        }
+
+        var shipCount = payload[at++];
+        if (shipCount > NetLimits.MaxPeers || at + shipCount * ShipPoseCodec.PoseBytes != payload.Length)
+        {
+            return false;
+        }
+
+        var ships = new ShipPoseWire[shipCount];
+        for (var i = 0; i < shipCount; i++)
+        {
+            if (!ShipPoseCodec.TryRead(payload, ref at, out var ship) || ship is null)
+            {
+                return false;
+            }
+
+            ships[i] = ship;
+        }
+
         if (at != payload.Length)
         {
             return false;
         }
 
         snap = new WorldSnapshot(sessionId, phase, failureReason, majorEventId, majorRemaining,
-            secured, lootMask, nodeMask, surveys, pulses, observe, drillIndex, drillElapsed, creatures);
+            secured, lootMask, nodeMask, surveys, pulses, observe, drillIndex, drillElapsed, creatures, ships);
         return true;
     }
 

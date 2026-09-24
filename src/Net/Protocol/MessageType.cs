@@ -14,6 +14,7 @@ public enum MessageType : ushort
     PlayerIntent = 10,
     GameEvent = 11,
     Snapshot = 20,
+    ShipPose = 21,
 }
 
 /// <summary>Fixed per-type payload bounds (docs/02 §5). Gameplay never uses JSON.</summary>
@@ -21,7 +22,7 @@ public static class MessageBounds
 {
     public static int MaxPayload(MessageType type) => type switch
     {
-        MessageType.HandshakeRequest => 256,
+        MessageType.HandshakeRequest => 384,
         MessageType.HandshakeResponse => 192,
         MessageType.LobbyUpdate => 1024,
         MessageType.PlayerReady => 64,
@@ -29,8 +30,10 @@ public static class MessageBounds
         MessageType.ReconnectToken => 192,
         MessageType.ReconnectClaim => 192,
         MessageType.PlayerIntent => 512,
-        MessageType.GameEvent => 1024,
+        // Carries CoopEvent bodies, including a reliable final WorldSnapshot copy.
+        MessageType.GameEvent => 2304,
         MessageType.Snapshot => 2048,
+        MessageType.ShipPose => 64,
         _ => -1,
     };
 
@@ -48,6 +51,7 @@ public static class MessageBounds
         MessageType.PlayerIntent => true,
         MessageType.GameEvent => true,
         MessageType.Snapshot => false,
+        MessageType.ShipPose => false,
         _ => false,
     };
 }

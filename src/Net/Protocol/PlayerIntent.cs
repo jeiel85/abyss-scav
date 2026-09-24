@@ -6,8 +6,8 @@ namespace AbyssScav.Protocol;
 /// Client interaction intent (docs/02 §3, §9). The client's local sim applies
 /// the interaction as prediction; the host authorizes it against the requester
 /// position and the shared world, and the next snapshot reconciles. Ship-local
-/// interactions (repair, winch, consumables, decoy/EMP, dock, extract) are not
-/// intents this batch: they stay client-local by design.
+/// interactions (repair, winch, consumables, decoy/EMP, dock) stay client-local
+/// by design; extraction is host-authorized per player (<see cref="IntentType.Extract"/>).
 /// </summary>
 public enum IntentType : byte
 {
@@ -18,6 +18,9 @@ public enum IntentType : byte
     Survey = 4,
     Service = 5,
     Pulse = 6,
+
+    /// <summary>Per-player extraction request; the host answers with a <see cref="CoopEventType"/> verdict.</summary>
+    Extract = 7,
 }
 
 public sealed record PlayerIntent(
@@ -35,7 +38,7 @@ public static class PlayerIntentCodec
     {
         written = 0;
         if (intent.Type == IntentType.Unknown ||
-            string.IsNullOrEmpty(intent.TargetId) && intent.Type is not (IntentType.Pulse or IntentType.DrillCancel or IntentType.Survey) ||
+            string.IsNullOrEmpty(intent.TargetId) && intent.Type is not (IntentType.Pulse or IntentType.DrillCancel or IntentType.Survey or IntentType.Extract) ||
             !string.IsNullOrEmpty(intent.TargetId) && Encoding.UTF8.GetByteCount(intent.TargetId) > NetLimits.MaxIdBytes)
         {
             return false;

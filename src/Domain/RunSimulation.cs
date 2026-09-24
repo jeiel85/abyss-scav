@@ -35,6 +35,12 @@ public enum RunPhase
     Extracted = 1,
     /// <summary>Run failed (hull loss or deadline); failure draft is available.</summary>
     Failed = 2,
+    /// <summary>
+    /// Co-op client only: the host was lost and the reconnect window expired
+    /// (docs/02 §12); the host-loss draft is available. Never sent on the wire
+    /// by a host.
+    /// </summary>
+    HostLost = 3,
 }
 
 /// <summary>Sonar signal class (docs/03 §4).</summary>
@@ -210,6 +216,12 @@ public enum SettlementOutcome
     Success = 0,
     /// <summary>Hull loss or deadline; insurance retention applied.</summary>
     Failed = 1,
+    /// <summary>
+    /// Co-op host lost (docs/02 §12): partial pay on the last host-confirmed
+    /// secured cargo at the insurance retention. Counts as neither a completed
+    /// nor a failed run in profile stats.
+    /// </summary>
+    HostLost = 2,
 }
 
 /// <summary>
@@ -306,6 +318,11 @@ public sealed class RunSimulation
     private readonly float _hullRatingEffective;
     private readonly Guid _runInstanceId;
     private RunSettlementDraft? _failureDraft;
+    private RunSettlementDraft? _hostLossDraft;
+    private bool _hasHostConfirmation;
+    private int _hostConfirmedSecured;
+    private int _hostConfirmedSurveys;
+    private int _hostConfirmedQuestItems;
 
     private DeterministicRandom _pressureRng;
     private DeterministicRandom _aiRng;
@@ -828,13 +845,9 @@ public sealed class RunSimulation
         if (snap.SalvagedLootMask.Length != (int)Math.Ceiling(_world.LootSpawns.Count / 8.0)) return false;
         if (snap.ServicedNodesMask.Length != (int)Math.Ceiling(_world.Nodes.Count / 8.0)) return false;
 
-        // Phase: the host's run lifecycle is authoritative once it ends. A local
-        // failure already in progress keeps its own reason.
-        if (Phase == RunPhase.Active && snap.Phase != (byte)RunPhase.Active)
-        {
-            Phase = (RunPhase)snap.Phase;
-            FailureReason = snap.FailureReason ?? FailureReason;
-        }
+        // Only the host lifecycle phases are legal on the wire.
+        if (snap.Phase > (byte)RunPhase.Failed) return false;
+        if (Phase != RunPhase.Active) return true; // local run already over: nothing to reconcile.
 
         for (var i = 0; i < _creatures.Count; i++)
         {
@@ -892,7 +905,110 @@ public sealed class RunSimulation
 
         _majorEventKind = snap.MajorEventId;
         _majorEventRemaining = snap.MajorEventRemaining;
+
+        // Last host-confirmed ledger: the only basis for host-loss settlement (docs/02 §12).
+        _hasHostConfirmation = true;
+        _hostConfirmedSecured = SecuredSalvageValue;
+        _hostConfirmedSurveys = SurveysDone;
+        _hostConfirmedQuestItems = _questRecovered.Count;
+
+        // Phase last, after the shared state converged: the host's lifecycle is
+        // authoritative once it ends. Host extraction is a team extraction — this
+        // player settles its own success draft from the converged shared state.
+        if (snap.Phase == (byte)RunPhase.Failed)
+        {
+            Phase = RunPhase.Failed;
+            FailureReason = snap.FailureReason ?? FailureReason;
+            Settlement = null;
+        }
+        else if (snap.Phase == (byte)RunPhase.Extracted)
+        {
+            TryExtractByHostAuthority();
+        }
+
         return true;
+    }
+
+    /// <summary>True once at least one host snapshot has been applied (co-op client).</summary>
+    public bool HasHostConfirmation => _hasHostConfirmation;
+
+    /// <summary>Secured salvage value as of the last applied host snapshot (co-op client).</summary>
+    public int HostConfirmedSecuredValue => _hostConfirmedSecured;
+
+    /// <summary>
+    /// Host side of a per-player co-op extraction (docs/02 §9.6): checks that
+    /// this (host) run is live, the shared primary objectives are complete, and
+    /// the requester's reported position is inside the extraction radius. The
+    /// host's own ship position is irrelevant. Never mutates state.
+    /// </summary>
+    public ActivationResult CanAuthorizeRemoteExtraction(Vector3 requesterPosition)
+    {
+        if (Phase != RunPhase.Active)
+            return new ActivationResult(false, "Run is not active.");
+        if (!IsFinite(requesterPosition))
+            return new ActivationResult(false, "Requester position is invalid.");
+        var extraction = _world.GetNode(_world.ExtractionNodeId).Position;
+        var dist = Vector3.Distance(extraction, requesterPosition);
+        if (dist > DomainConstants.ExtractionRadiusMeters)
+            return new ActivationResult(false, "Not in the extraction zone ({0:F0} m, need {1:F0} m).", dist, DomainConstants.ExtractionRadiusMeters);
+        var progress = Contract;
+        if (!progress.PrimaryComplete)
+        {
+            var missing = string.Join(", ", progress.Objectives.Where(o => !o.IsComplete).Select(o => $"{o.ObjectiveId} {o.Current}/{o.Required}"));
+            return new ActivationResult(false, "Primary objectives incomplete: {0}.", missing);
+        }
+
+        return new ActivationResult(true, string.Empty);
+    }
+
+    /// <summary>
+    /// Co-op client extraction on host authority (docs/02 §9.6): the host either
+    /// approved this player's extraction request or extracted the team. The
+    /// position/objective checks already ran on the host, so only the phase is
+    /// checked here. Builds this player's own success draft (shared contract and
+    /// secured cargo, this ship's repair cost) and caches it in
+    /// <see cref="Settlement"/>; repeated calls never mint a second draft.
+    /// </summary>
+    public ExtractResult TryExtractByHostAuthority()
+    {
+        if (Phase != RunPhase.Active)
+            return new ExtractResult(false, "Run is not active.", null, Array.Empty<object>());
+        Phase = RunPhase.Extracted;
+        Settlement = BuildSuccessSettlement();
+        Raise("extract.success", "Extracted with {0} cr.", Settlement.Credits);
+        return new ExtractResult(true, string.Empty, Settlement, Array.Empty<object>());
+    }
+
+    /// <summary>
+    /// Host-loss settlement for a co-op client (docs/02 §12): after the reconnect
+    /// window expires, only the last host-confirmed secured cargo is partially
+    /// paid at the insurance retention (buoy +0.3, capped 0.9 — the failure
+    /// rule), host-confirmed survey research is kept in full (docs/05 §3), no
+    /// contract base, no shards. Local predictions the host never confirmed pay
+    /// nothing. Moves the phase to <see cref="RunPhase.HostLost"/>; the draft is
+    /// cached so every call returns the same settlement id. Returns null when
+    /// the run already ended another way.
+    /// </summary>
+    public RunSettlementDraft? BuildHostLossSettlement()
+    {
+        if (_hostLossDraft is not null) return _hostLossDraft;
+        if (Phase != RunPhase.Active) return null;
+        Phase = RunPhase.HostLost;
+        FailureReason = "Host connection lost.";
+        Settlement = null;
+        _drillLootSpawnId = null;
+        _drillRemote = false;
+        var retention = Retention();
+        if (_buoyFired) retention = Math.Min(0.9, retention + 0.3);
+        var credits = (long)Math.Round(_hostConfirmedSecured * retention);
+        var research = _hostConfirmedSurveys * 10L + _hostConfirmedQuestItems * 5L;
+        _hostLossDraft = new RunSettlementDraft(
+            SettlementId(), _world.RunSeed, _world.BiomeId, _world.ContractId,
+            _difficulty.Id, _insuranceId, SettlementOutcome.HostLost,
+            _contract.BasePayout, _hostConfirmedSecured, 0, 0, 0,
+            credits, credits, research, 0);
+        Raise("run.host_lost", "Host lost: settling {0} cr from the last confirmed cargo.", credits);
+        return _hostLossDraft;
     }
 
     // -------------------------------------------------------------------- tick
