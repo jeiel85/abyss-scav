@@ -227,7 +227,26 @@ public partial class CoopRunLink : Node
         return list;
     }
 
-    /// <summary>Client: feeds the ship poses of an applied host snapshot.</summary>
+    /// <summary>Freshness bound for authority checks against an accepted pose (15 Hz sends).</summary>
+    public const double AcceptedPoseMaxAgeSeconds = 1.5;
+
+    /// <summary>
+    /// Host: the requester's last host-validated position (domain space), if
+    /// fresh. Extraction is authorized against this, never against a position
+    /// the client only claims in its intent.
+    /// </summary>
+    public bool TryGetAcceptedPosition(ulong peerId, out SysVec position)
+    {
+        position = default;
+        return _isHost && _gate is not null && _gate.TryGetAccepted(peerId, Now, AcceptedPoseMaxAgeSeconds, out position);
+    }
+
+    /// <summary>
+    /// Client: feeds the ship poses of an applied host snapshot. The host sends
+    /// the full live ship list every snapshot, so a teammate missing from it
+    /// (left, or re-keyed to a new peer id by a reconnect takeover) is retired
+    /// at once instead of lingering as a phantom proxy.
+    /// </summary>
     public void ApplyShips(IReadOnlyList<ShipPoseWire> ships)
     {
         var session = _session;
@@ -237,6 +256,7 @@ public partial class CoopRunLink : Node
         }
 
         var now = Now;
+        var present = new HashSet<ulong>();
         foreach (var ship in ships)
         {
             if (ship.PeerId == session.LocalPeerId || ship.PeerId == NetLimits.InvalidId)
@@ -244,7 +264,19 @@ public partial class CoopRunLink : Node
                 continue;
             }
 
+            present.Add(ship.PeerId);
             Ingest(ship.PeerId, ship, now);
+        }
+
+        foreach (var peerId in _remotes.Keys.Where(id => !present.Contains(id)).ToList())
+        {
+            var remote = _remotes[peerId];
+            if (remote.Proxy is not null && IsInstanceValid(remote.Proxy))
+            {
+                remote.Proxy.QueueFree();
+            }
+
+            _remotes.Remove(peerId);
         }
     }
 

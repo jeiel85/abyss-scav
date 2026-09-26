@@ -163,13 +163,13 @@ wire 상한: id 필드는 64 B, layout/catalog hash 필드는 128 B(`sha256:` + 
 - **Host 검증** `ShipPoseGate`(Domain): 유한값, 쿼터니언 길이 0.9–1.1, 속도 ≤ 60 m/s(부스트 종단속도 ≈33 m/s의 여유치), 월드 AABB(노드 + 최대 clearance + 80 m) 안, 도착 간격 ≥ 1/30 s, 마지막 **승인** 포즈 대비 이동거리 ≤ 60 m/s × dt + 12 m. 1회용 비상 윈치 순간이동은 `Teleported` 플래그로 **플레이어당 런 1회**만 허용(재접속 rekey 후에도 예산 유지). 거부된 포즈는 기준을 오염시키지 않는다. 포즈의 소유 peer는 항상 transport 발신자로 덮어쓴다.
 - **Host → all**: 호스트 자신의 포즈 + 3초 이내 수신된 각 클라이언트의 최신 승인 포즈를 `WorldSnapshot.Ships`에 실어 15 Hz로 재방송(별도 메시지 없음 → 클라이언트 unreliable 수신량 불변).
 - **보간** `PoseInterpolationBuffer`(Domain): 수신자 로컬 도착 시각 기준 타임라인, **렌더 지연 120 ms**(≈15 Hz 2샘플), 버퍼 고갈 시 마지막 속도로 최대 250 ms 외삽 후 정지, 연속 샘플 간 40 m 초과 점프는 버퍼 리셋 + **텔레포트 스냅**. `PoseCorrection`: 표시 위치와 보간 목표 차이 ≤1.5 m는 그대로 추종, 1.5–40 m는 τ=150 ms 지수 블렌드(**large-correction blend**), 40 m 초과는 스냅.
-- **렌더링**: `RemoteSubmarineProxy` — 이름표(Label3D) + 호박색 조명. 3초 무수신 시 숨김, 30초 무수신 시 해제, `Extracted/Failed` 플래그면 숨김. 호스트 쪽은 끊긴 peer에 `(link lost)` 표시 후 재접속 시 같은 엔티티를 새 peer id로 rekey.
+- **렌더링**: `RemoteSubmarineProxy` — 이름표(Label3D) + 호박색 조명. 3초 무수신 시 숨김, 30초 무수신 시 해제, `Extracted/Failed` 플래그면 숨김. 호스트 쪽은 끊긴 peer에 `(link lost)` 표시 후 재접속 시 같은 엔티티를 새 peer id로 rekey. 클라이언트는 매 스냅샷의 함선 목록(호스트가 보낸 전체 목록)에 없는 원격 프록시를 즉시 해제하므로, 재접속으로 peer id가 바뀐 팀원이 유령 프록시로 남지 않는다.
 - **충돌 정책(결정)**: 프록시는 **물리 바디/콜라이더가 없다**. 지터·보간 지연·보정 스냅 때문에 원격 선체가 로컬 잠수정을 예기치 않게 밀어내는 일을 원천 차단하기 위함이며, 팀원 잠수정은 서로 통과한다.
 - **소나**: `TeammateSonarOverlay`가 `SonarDisplay`의 전체 크기 자식으로 붙어 팀원을 "빈 원 + 이름 첫 글자"로 그린다(모양으로 구분, 색에만 의존하지 않음). 범위 밖 팀원은 테두리에 방위만 표시. 스코프 기하(중심 y=144, 반경 96 px)는 `SonarDisplay._Draw`와 동기화해야 한다.
 
 ### 9.6 Per-player extraction & settlement (v2)
 docs/05는 협동 분배를 명시하지 않으므로 **가장 단순하고 공정한 규칙**을 택했다.
-- **개인 탈출**: 공유 주 목표 완료 + **자기 잠수정**이 탈출 반경(30 m) 안이면 누구나 탈출 가능. 클라이언트는 같은 규칙을 로컬로 선검사(즉시 현지화된 거부 메시지) 후 `IntentType.Extract`(보고 위치 포함)를 보내고, 호스트가 `CanAuthorizeRemoteExtraction(pos)`로 재검증해 reliable `GameEvent`로 `ExtractApproved`(현재 월드 스냅샷 포함) 또는 `ExtractRefused`(사유)를 회신한다. 6초 무응답이면 요청을 해제하고 재시도를 안내한다. 승인 시 클라이언트는 동봉 스냅샷(호스트 확정 공유 상태)을 적용한 뒤 `TryExtractByHostAuthority()`.
+- **개인 탈출**: 공유 주 목표 완료 + **자기 잠수정**이 탈출 반경(30 m) 안이면 누구나 탈출 가능. 클라이언트는 같은 규칙을 로컬로 선검사(즉시 현지화된 거부 메시지) 후 `IntentType.Extract`를 보내고, 호스트가 **인텐트의 보고 위치가 아니라 `ShipPoseGate`가 마지막으로 승인한 요청자 포즈**(1.5초 이내, 없거나 오래되면 거부)로 `CanAuthorizeRemoteExtraction(pos)` 재검증해 reliable `GameEvent`로 `ExtractApproved`(현재 월드 스냅샷 포함) 또는 `ExtractRefused`(사유)를 회신한다. 6초 무응답이면 요청을 해제하고 재시도를 안내한다. 승인 시 클라이언트는 동봉 스냅샷(호스트 확정 공유 상태)을 적용한 뒤 `TryExtractByHostAuthority()`.
 - **팀 탈출**: 호스트가 탈출하면 아직 Active인 모든 클라이언트가 각자 성공 정산을 받는다(늦게 도착한 팀원을 버리는 호스트 그리핑 방지). 이미 실패/탈출/host-loss 정산한 클라이언트는 영향 없음.
 - **정산 금액**: 플레이어마다 **자기 sim**의 `BuildSuccessSettlement` — 계약 기본급·확보 화물(공유 마스크로 재구성)·목표/리스크 보너스는 팀 공유 값, 수리비는 **자기 잠수정** 기준. 즉 각 플레이어가 전체 계약 보상을 받는다(분할 없음).
 - **멱등성**: 정산 id는 `settle.{seed}.{runInstanceId}.{contract}`로 각 클라이언트 sim 인스턴스마다 고유하고 초안은 캐시된다 — 같은 로컬 세이브에는 원장(`src/Persistence/Settlement.cs`)으로 정확히 1회 적용된다. 반복 스냅샷/이벤트 수신도 두 번째 초안을 만들지 않는다.

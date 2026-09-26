@@ -23,6 +23,7 @@ internal static class CoopShipTests
             ("pose_gate_rejects_invalid_values", GateRejectsInvalid),
             ("pose_gate_rate_and_jump_limits", GateRateAndJump),
             ("pose_gate_winch_teleport_once_survives_rekey", GateTeleportOnce),
+            ("pose_gate_exposes_only_fresh_accepted_position", GateAcceptedPosition),
             ("remote_extraction_requires_zone_and_objectives", RemoteExtractionRules),
             ("host_authority_extraction_is_idempotent", HostAuthorityExtraction),
             ("host_extraction_snapshot_is_team_extraction", TeamExtraction),
@@ -160,6 +161,22 @@ internal static class CoopShipTests
         TestAssert.Equal(PoseVerdict.ImpossibleJump, gate.Evaluate(2, 5.1, far, Quaternion.Identity, Vector3.Zero, false), "60 m in 0.1 s refused");
         // After enough time the same spot is reachable again (no permanent lock).
         TestAssert.Equal(PoseVerdict.Accepted, gate.Evaluate(2, 9.0, far, Quaternion.Identity, Vector3.Zero, false), "reachable after 4 s");
+    }
+
+    private static void GateAcceptedPosition()
+    {
+        var (gate, origin) = Gate();
+        TestAssert.False(gate.TryGetAccepted(2, 1.0, 1.5, out _), "no pose yet: nothing to authorize with");
+        gate.Evaluate(2, 1.0, origin, Quaternion.Identity, Vector3.Zero, false);
+        TestAssert.True(gate.TryGetAccepted(2, 1.2, 1.5, out var accepted), "fresh accepted pose available");
+        TestAssert.Equal(origin, accepted, "accepted position returned");
+        var far = Toward(gate, origin, 60f);
+        TestAssert.Equal(PoseVerdict.ImpossibleJump, gate.Evaluate(2, 1.3, far, Quaternion.Identity, Vector3.Zero, false), "claimed jump refused");
+        TestAssert.True(gate.TryGetAccepted(2, 1.4, 1.5, out var still), "still has the accepted pose");
+        TestAssert.Equal(origin, still, "a refused pose never replaces the accepted one");
+        TestAssert.False(gate.TryGetAccepted(2, 3.0, 1.5, out _), "stale accepted pose refused");
+        gate.Rekey(2, 9);
+        TestAssert.True(gate.TryGetAccepted(9, 1.5, 1.5, out _), "accepted pose follows a reconnect rekey");
     }
 
     private static void GateTeleportOnce()

@@ -765,5 +765,6 @@
   "{0} extracted.": "{0} 탈출 완료.",
   "Allow joining a dive in progress": "진행 중인 다이브 참가 허용",
   "Late joiners may enter the dive until the extraction final sequence.": "탈출 최종 단계 전까지 늦은 참가자가 다이브에 들어올 수 있습니다.",
-  "The dive is closed to late joiners.": "늦은 참가자에게 다이브가 닫혀 있습니다."
+  "The dive is closed to late joiners.": "늦은 참가자에게 다이브가 닫혀 있습니다.",
+  "No recent validated position from your submarine; move and try again.": "최근에 검증된 잠수정 위치가 없습니다. 조금 움직인 뒤 다시 시도하세요."
 }

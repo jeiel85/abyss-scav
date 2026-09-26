@@ -488,20 +488,30 @@ public partial class RunController : Node3D
                 _sim.ApplyRemotePulse(pos);
                 break;
             case IntentType.Extract:
-                AuthorizeRemoteExtraction(peerId, pos);
+                AuthorizeRemoteExtraction(peerId);
                 break;
         }
     }
 
     /// <summary>
-    /// Host: per-player extraction (docs/02 §9.6). The requester must be inside
-    /// the extraction radius (reported position, like every other intent) with
-    /// the shared primary objectives complete. Approval carries the current world
-    /// snapshot so the client settles on host-confirmed shared state.
+    /// Host: per-player extraction (docs/02 §9.6). The requester's last
+    /// host-validated ship pose (fresh within
+    /// <see cref="CoopRunLink.AcceptedPoseMaxAgeSeconds"/>) must be inside the
+    /// extraction radius with the shared primary objectives complete — the
+    /// position claimed in the intent is ignored, so a modified client cannot
+    /// extract from elsewhere. Approval carries the current world snapshot so
+    /// the client settles on host-confirmed shared state.
     /// </summary>
-    private void AuthorizeRemoteExtraction(ulong peerId, SysVec requesterPosition)
+    private void AuthorizeRemoteExtraction(ulong peerId)
     {
         if (_sim is null) return;
+        if (_link is null || !_link.TryGetAcceptedPosition(peerId, out var requesterPosition))
+        {
+            const string noPose = "No recent validated position from your submarine; move and try again.";
+            GodotLogBridge.Info(GameServices.Logger, $"[coop] extraction refused for peer {peerId}: no fresh accepted pose.");
+            SendCoopEvent(peerId, CoopEventType.ExtractRefused, noPose, null);
+            return;
+        }
         var verdict = _sim.CanAuthorizeRemoteExtraction(requesterPosition);
         if (!verdict.Success)
         {
@@ -599,7 +609,7 @@ public partial class RunController : Node3D
                 break;
             case CoopEventType.ExtractRefused:
                 _extractPending = false;
-                _hud?.ShowMessage(Localization.T("Extraction refused by host: {0}", (object)(evt.Text ?? "?")), 5f);
+                _hud?.ShowMessage(Localization.T("Extraction refused by host: {0}", (object)Localization.T(evt.Text ?? "?")), 5f);
                 break;
             case CoopEventType.FinalSnapshot:
                 if (evt.Body is not null && WorldSnapshotCodec.TryDecode(evt.Body, out var finalWorld) &&

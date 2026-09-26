@@ -292,6 +292,24 @@ public sealed class ShipPoseGate
     }
 
     /// <summary>
+    /// The host's last <em>accepted</em> position for <paramref name="peerId"/>,
+    /// if it is no older than <paramref name="maxAgeSeconds"/> at
+    /// <paramref name="now"/>. Authority checks (e.g. extraction) use this
+    /// instead of a position the client merely claims in an intent.
+    /// </summary>
+    public bool TryGetAccepted(ulong peerId, double now, double maxAgeSeconds, out Vector3 position)
+    {
+        position = default;
+        if (!_last.TryGetValue(peerId, out var last) || !double.IsFinite(now) || now - last.Time > maxAgeSeconds)
+        {
+            return false;
+        }
+
+        position = last.Position;
+        return true;
+    }
+
+    /// <summary>
     /// A reconnecting player keeps its history under the new peer id (the
     /// winch budget must not reset by reconnecting).
     /// </summary>
