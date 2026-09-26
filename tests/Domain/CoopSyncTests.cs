@@ -26,6 +26,7 @@ internal static class CoopSyncTests
             ("snapshot_world_mismatch_rejected", SnapshotMismatch),
             ("replicated_attack_far_away_does_not_strike", ReplicatedAttackFarAway),
             ("replicated_attack_in_reach_strikes", ReplicatedAttackInReach),
+            ("replicated_attack_keeps_local_cadence", ReplicatedAttackLocalCadence),
         };
 
         var fail = 0;
@@ -224,6 +225,38 @@ internal static class CoopSyncTests
         var hullBefore = client.HullIntegrity;
         client.Tick(0.1f, client.ShipPosition, DomainSetup.Idle);
         TestAssert.True(client.HullIntegrity < hullBefore, $"strike landed in reach: {hullBefore:F0} -> {client.HullIntegrity:F0}");
+    }
+
+    /// <summary>
+    /// The host re-asserts Attack at 15 Hz; the client's strike cooldown is
+    /// local (never replicated), so strikes on its sub keep the 4 s cadence.
+    /// </summary>
+    private static void ReplicatedAttackLocalCadence()
+    {
+        var (host, client, _, catalog) = Twins("contract.blackbox_recovery", DomainSetup.FirstBiome(DomainSetup.Catalog(), "contract.blackbox_recovery"));
+        var index = DamagingCreatureIndex(client, catalog);
+        var snap = AttackSnapshot(host, index);
+        var wire = snap.Creatures[index];
+        DomainSetup.Teleport(client, new Vector3(wire.X, wire.Y, wire.Z));
+        var strikes = 0;
+        client.EventRaised += e => { if (e.Kind == "creature.strike") strikes++; };
+
+        var elapsed = 0f;
+        while (elapsed < 3.5f)
+        {
+            TestAssert.True(client.ApplyWorldSnapshot(snap), "attack snapshot applied");
+            client.Tick(0.066f, client.ShipPosition, DomainSetup.Idle);
+            elapsed += 0.066f;
+        }
+        TestAssert.Equal(1, strikes, "one strike inside the cooldown window");
+
+        while (elapsed < 4.5f)
+        {
+            TestAssert.True(client.ApplyWorldSnapshot(snap), "attack snapshot applied");
+            client.Tick(0.066f, client.ShipPosition, DomainSetup.Idle);
+            elapsed += 0.066f;
+        }
+        TestAssert.Equal(2, strikes, "next strike after the cooldown");
     }
 
     /// <summary>First creature whose strike actually deals hull damage (chorus colonies deal none).</summary>
