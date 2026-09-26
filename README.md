@@ -2,7 +2,7 @@
 
 Dark industrial submarine salvage — pilot a deep-sea submersible, hunt contracts in the abyss, and get back alive.
 
-**Version:** 0.1.0-a01 · **Engine:** Godot 4.7.2 stable (.NET / C#) · **Target:** Windows 10/11
+**Version:** 0.2.0 · **Engine:** Godot 4.7.2 stable (.NET / C#) · **Target:** Windows 10/11
 
 ## Current State
 
@@ -11,22 +11,28 @@ This is a **solo-playable vertical slice** with a full host-authoritative networ
 ### Playable now
 - **Solo dive loop**: contract & loadout selection → procedural trench generation → piloting, sonar, salvage, repair, docking, drilling, extraction → settlement (credits / research data / shards).
 - **Tutorial**: "The First Ping" — 7 guided steps (steer, passive sonar, active ping, dock, salvage, repair, extract).
-- **Content**: 3 biomes, 8 contract archetypes, 3 submarine frames, 24 modules (22 with implemented in-run effects), 8 consumables, 9 major random events, 4 difficulties, 11 creatures (8 + 3 apex), 8 relic traits, 8 contract modifiers.
+- **Content**: 3 biomes, 8 contract archetypes, 3 submarine frames, 24 modules (all with implemented in-run effects), 8 consumables, 9 major random events, 4 difficulties, 11 creatures (8 + 3 apex), 8 relic traits, 8 contract modifiers.
 - **Meta progression**: Research screen (4 branches; only modules with real effects are purchasable) and Codex (survey records: creatures, waters, relic traits).
 - **Settings**: resolution, window mode, graphics quality, master volume, language (English / 한국어).
+- **Accessibility** (Settings → Accessibility / Key bindings):
+  - **Colour-vision sonar palettes** — Standard, Red–green safe (deuteranopia/protanopia, Okabe–Ito based) and Blue–yellow safe (tritanopia). Contact kinds also differ by glyph (diamond salvage, triangle biological, square structure, "?" unknown, dash terrain) with a legend under the scope, so colour is never the only cue. Palette separation is unit-tested under simulated dichromacy.
+  - **High-contrast HUD** — opaque panels, bright outlined text, heavier borders, larger outlined sonar glyphs.
+  - **Keyboard remapping** — press-to-rebind for every movement, sonar/tool and consumable action; a key already in use is swapped with the other action; one-click reset to defaults. Bindings persist in `settings.cfg` and apply on the next dive; on-screen key hints (HUD controls line, tutorial checklist, warnings, contract text) follow the current bindings. Esc (pause) and gamepad buttons are fixed.
 - **Save system**: local profile with 3-generation atomic rollback and an idempotent settlement ledger.
 - **Diagnostics**: logs folder, support-bundle export, headless smoke tests, deterministic autopilot playback.
 
-### Co-op lobby + shared world sync (live; ship replication is the next batch)
+### Co-op: lobby, shared world, teammate ships, per-player settlement (live)
 - **Multiplayer**: ENet host-authoritative listen server, LAN discovery, Direct-IP join, UPnP port mapping, reconnect grace, host-loss settlement protection — implemented and covered by tests.
 - **Lobby UI**: host a LAN lobby, join by direct IP, or pick a session from LAN discovery; player list with ready states, host contract staging, and a run-manifest broadcast that loads the same deterministic world for every peer.
 - **In-run world sync**: the host's `RunSimulation` is the world authority — a 15 Hz `WorldSnapshot` (loot/node bitmasks, drill state, contract progress, creature states, phase) replicates the shared world, and client interactions (salvage, drill, survey, service, pulse) apply locally as prediction then send `PlayerIntent`s the host re-validates by position. Run end (failed/extracted/host loss) is mirrored to clients.
-- **Honest scope**: ship transform replication is not in yet — each player pilots their own submarine on the shared world, and only the host's extraction is credited (clients see a message). Join-in-progress and reconnect takeover are the next batch.
+- **Teammate submarines**: every player pilots their own sub; clients send their pose at 15 Hz, the host validates it (finite, speed ≤ 60 m/s, in world bounds, reachable, one winch teleport) and republishes all poses in the world snapshot. Remote subs render as collider-less proxies (120 ms interpolation buffer, short extrapolation, large-correction blend, teleport snap) with a name tag, plus teammate markers on the sonar scope. Proxies never push your sub — teammates pass through each other by design.
+- **Per-player extraction**: with the shared objectives done, any player can extract their own sub at the extraction zone (clients are host-authorized); a host extraction extracts the whole team. Every player settles their own draft once through the settlement ledger.
+- **Host loss / reconnect / join-in-progress**: a dropped host opens an 8 s reconnect window (automatic token reconnect, same sub), then host-loss settlement pays only the last host-confirmed cargo at the insurance retention. A dropped client reclaims its seat and ship with its session token (seat held 120 s). The host can open a running dive to late joiners (lobby toggle, off by default) until the extraction final sequence.
+- **Remaining limits**: no host migration; the host's hull loss fails the whole team; creature AI tracks the host's sub; reconnect does not survive a game restart.
 
 ### Not implemented
-- Accessibility features (colorblind sonar palettes, high-contrast HUD, key remapping) — **not present**; do not expect them in this build.
-- 2 of 24 modules have no in-run effect yet and are not purchasable/equippable (heat sink, vector fin).
-- Ship transform replication (each player's submarine position/heading), join-in-progress, reconnect takeover, host-loss settlement.
+- Accessibility beyond the three options above: gamepad remapping, hold/toggle choice, subtitle sizing, camera shake/FOV sliders (docs/07 §6) are not in this build. Esc stays bound to pause.
+- Co-op host migration (host loss ends the dive for clients with a host-loss settlement).
 
 ## Quick Start
 
@@ -40,7 +46,7 @@ Requires Godot 4.7.2 stable Mono. The batch file points at a local Godot binary 
 ```bat
 python tools/package_windows.py
 ```
-Produces `dist/AbyssScav-v0.1.0-a01-win-x64.zip` plus a SHA-256 manifest. Extract to a normal folder and run `AbyssScav.exe` (never run inside the archive).
+Produces `dist/AbyssScav-v0.2.0-win-x64.zip` plus a SHA-256 manifest. Extract to a normal folder and run `AbyssScav.exe` (never run inside the archive).
 
 ### Run all tests
 ```bat
@@ -60,6 +66,8 @@ Short version:
 
 ### Controls
 
+Default keyboard layout — every key below except Esc can be rebound in **Settings → Key bindings**.
+
 | Action | Key |
 |---|---|
 | Surge (forward/back) | W / S |
@@ -78,6 +86,8 @@ Short version:
 | Emergency winch | X |
 | Consumable 1–8 | 1–8 |
 | Fire emergency buoy | B |
+| Launch acoustic decoy | N |
+| Fire EMP coil | M |
 | Extract | T |
 | Pause | Esc |
 
@@ -88,7 +98,7 @@ Short version:
 | Biomes | Continental Shelf Graveyard (1,500–3,000 m) · Black Trench (3,000–6,000 m) · Hadal Ruins (6,000–9,000 m) |
 | Contracts | SalvageQuota · BlackBoxRecovery · FacilityCoreExtraction · BioSampleHunt · BeaconRepair · SurveyScan · RescuePodRecovery · ApexObservation |
 | Frames | Skiff (agile) · Mule (heavy cargo) · Warden (armored) |
-| Modules with effects | WhisperPulse · PassiveBooster · WideArray · FocusBeam · ResonanceClassifier · GhostFilter · QuietProp · OverdriveThruster · CavitationDampener · EmergencyReverse · ReinforcedRib · PressureSkin · AbyssPlating · FloodBulkhead · SelfSealingFoam · ShockBuffer · SalvageMagnet · EmergencyBuoy · DrillArm · RepairDrone |
+| Modules with effects | WhisperPulse · PassiveBooster · WideArray · FocusBeam · ResonanceClassifier · GhostFilter · QuietProp · OverdriveThruster · CavitationDampener · EmergencyReverse · VectorFin · HeatSink · ReinforcedRib · PressureSkin · AbyssPlating · FloodBulkhead · SelfSealingFoam · ShockBuffer · SalvageMagnet · EmergencyBuoy · DrillArm · RepairDrone · DecoyLauncher · EmpCoil |
 | Consumables | Sealant Canister · Battery Pack · Hull Patch · Acoustic Decoy · Pressure Flare · Sonar Buoy · Stim · Antifreeze |
 | Major events | Acoustic Disturbance · Facility Alarm · Anomaly · Current Shift · Migration · Collapsing Trench · False Distress Beacon · Relic Resonance · Extraction Ambush |
 | Difficulties | Casual Dive · Standard · Blackwater · Custom |

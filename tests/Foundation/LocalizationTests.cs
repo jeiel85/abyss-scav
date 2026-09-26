@@ -18,9 +18,9 @@ internal static class LocalizationTests
             ("language_names_are_native", LanguageNames),
             ("available_languages_cover_en_and_ko", AvailableLanguages),
             ("ko_table_has_no_empty_keys_or_values", KoTableIntegrity),
-            ("appsettings_defaults_to_english_schema2", AppSettingsDefaults),
+            ("appsettings_defaults_to_english_schema3", AppSettingsDefaults),
             ("appsettings_normalized_whitelists_language", AppSettingsNormalized),
-            ("config_v1_without_language_migrates_to_v2_english", ConfigV1Migration),
+            ("config_v1_without_language_migrates_to_current_english", ConfigV1Migration),
             ("config_v2_korean_roundtrips", ConfigKoreanRoundtrip),
         };
 
@@ -122,10 +122,12 @@ internal static class LocalizationTests
 
     private static void AppSettingsDefaults()
     {
-        TestAssert.Equal(2, AppSettings.CurrentSchemaVersion, "schema 2");
+        // Pinned on purpose: v3 added sonar_palette / high_contrast_hud / key_bindings.
+        // A future bump must update this pin deliberately.
+        TestAssert.Equal(3, AppSettings.CurrentSchemaVersion, "schema 3");
         var defaults = AppSettings.Default();
         TestAssert.Equal("en", defaults.Language, "default language");
-        TestAssert.Equal(2, defaults.SchemaVersion, "default schema");
+        TestAssert.Equal(3, defaults.SchemaVersion, "default schema");
     }
 
     private static void AppSettingsNormalized()
@@ -146,7 +148,7 @@ internal static class LocalizationTests
         File.WriteAllText(paths.ConfigPath, v1);
         var result = ConfigLoader.Load(paths);
         TestAssert.Equal(ConfigLoadStatus.Ok, result.Status, "status");
-        TestAssert.Equal(2, result.Settings.SchemaVersion, "promoted to v2");
+        TestAssert.Equal(AppSettings.CurrentSchemaVersion, result.Settings.SchemaVersion, "promoted to current schema");
         TestAssert.Equal("en", result.Settings.Language, "missing language -> en");
         TestAssert.Equal(42, result.Settings.MasterVolumePercent, "volume preserved");
     }

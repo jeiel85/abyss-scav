@@ -13,8 +13,9 @@ namespace AbyssScav.Presentation;
 /// Co-op lobby (docs/02 §7-§8): player list with ready states, ready toggle for
 /// clients, host contract staging + start, and leave. The host broadcasts the
 /// run manifest; every peer (host included) stages the shared world and moves to
-/// the run scene. In-run host-authoritative replication is the next batch — the
-/// run scene itself is still solo per player on the shared world.
+/// the run scene, where the host-authoritative world/ship sync takes over
+/// (docs/02 §9). A client that joins while a dive is running receives the
+/// manifest right after the handshake and is sent straight into the run (§10).
 /// </summary>
 public partial class LobbyScreen : Control
 {
@@ -27,6 +28,7 @@ public partial class LobbyScreen : Control
     private Button? _startButton;
     private Label? _status;
     private bool _localReady;
+    private CheckButton? _lateJoin;
 
     public override void _Ready()
     {
@@ -53,6 +55,13 @@ public partial class LobbyScreen : Control
         _session.MappingStatus += OnMappingStatus;
         RefreshPlayers();
         RefreshHostControls();
+        if (!_session.IsHost && _session.CurrentManifest is not null)
+        {
+            // Join-in-progress (docs/02 §10): the host sent the running dive's
+            // manifest right after the handshake, before this screen existed.
+            Say(Localization.T("Joining the dive in progress…"));
+            Callable.From(OnRunStarted).CallDeferred();
+        }
     }
 
     public override void _ExitTree()
@@ -166,6 +175,17 @@ public partial class LobbyScreen : Control
         _players.AddThemeConstantOverride("separation", 4);
         box.AddChild(_players);
 
+        // Host-only admission knob (docs/02 §10): off by default; late joiners are
+        // still refused once the dive reaches its final extraction sequence.
+        _lateJoin = new CheckButton
+        {
+            Text = Localization.T("Allow joining a dive in progress"),
+            ButtonPressed = session.Settings?.JoinInProgress ?? false,
+            Visible = session.IsHost,
+        };
+        _lateJoin.Toggled += OnLateJoinToggled;
+        box.AddChild(_lateJoin);
+
         _status = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart };
         _status.AddThemeFontSizeOverride("font_size", 13);
         _status.AddThemeColorOverride("font_color", Amber());
@@ -246,6 +266,21 @@ public partial class LobbyScreen : Control
         if (session is null) return false;
         var players = session.Players;
         return players.Count > 0 && players.All(p => p.Ready);
+    }
+
+    private void OnLateJoinToggled(bool on)
+    {
+        var session = _session;
+        var settings = session?.Settings;
+        if (session is null || !session.IsHost || settings is null) return;
+        if (!session.UpdateLobby(settings with { JoinInProgress = on }, out var error))
+        {
+            Say(error);
+            return;
+        }
+        Say(on
+            ? Localization.T("Late joiners may enter the dive until the extraction final sequence.")
+            : Localization.T("The dive is closed to late joiners."));
     }
 
     private void OnLobbyChanged() => RefreshPlayers();

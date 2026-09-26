@@ -43,6 +43,8 @@ public partial class RunPlaybackTest : Node3D
     private float _forceNormal;
     private double _speedQuiet;
     private float _forceQuiet;
+    private double _speedStockHard;
+    private float _forceStockHard;
 
     // Play state.
     private Node3D? _playRoot;
@@ -261,14 +263,41 @@ public partial class RunPlaybackTest : Node3D
                 Check(_forceQuiet <= 8200f, "quiet.caps_force",
                     $"normal_max={_forceNormal:F0}N quiet_max={_forceQuiet:F0}N (need <=8200)");
                 Check(boostOff, "quiet.disables_boost", "BoostHeld=false while quiet with TestBoost set");
+                ResetQuietSub();
+                StartQuietPhase(2);
+            }
+            else if (_quietPhase == 2)
+            {
+                _speedStockHard = avg;
+                _forceStockHard = _quietMaxForce;
+                ResetQuietSub();
+                StartQuietPhase(3);
+            }
+            else if (_quietPhase == 3)
+            {
+                // Loadout thrust above x1.0 (overdrive) must reach the physics:
+                // with a demand past the stock cap, force and speed both rise.
+                Check(_quietMaxForce > _forceStockHard * 1.3f, "loadout.overdrive_force",
+                    $"stock_max={_forceStockHard:F0}N overdrive_max={_quietMaxForce:F0}N (need >x1.3)");
+                Check(avg > _speedStockHard * 1.1, "loadout.overdrive_speed",
+                    $"stock={_speedStockHard:F1}m/s overdrive={avg:F1}m/s (need >x1.1)");
                 _quietSub.TestDriveWorld = null;
                 _quietSub.TestBoost = false;
                 _quietSub.QuietMode = false;
+                _quietSub.ThrustMultiplier = 1f;
                 _quietRoot?.QueueFree();
                 _quietSub = null;
                 BeginPlay();
             }
         }
+    }
+
+    private void ResetQuietSub()
+    {
+        if (_quietSub is null) return;
+        _quietSub.LinearVelocity = Vector3.Zero;
+        _quietSub.AngularVelocity = Vector3.Zero;
+        _quietSub.GlobalPosition = Vector3.Zero;
     }
 
     private void StartQuietPhase(int phase)
@@ -279,9 +308,20 @@ public partial class RunPlaybackTest : Node3D
         _quietSpeedN = 0;
         _quietMaxForce = 0;
         if (_quietSub is null) return;
-        _quietSub.TestDriveWorld = new Vector3(0f, 0f, -25f);
-        _quietSub.TestBoost = true; // boost attempted in both legs; quiet must null it.
-        _quietSub.QuietMode = phase == 1;
+        if (phase <= 1)
+        {
+            _quietSub.TestDriveWorld = new Vector3(0f, 0f, -25f);
+            _quietSub.TestBoost = true; // boost attempted in both legs; quiet must null it.
+            _quietSub.QuietMode = phase == 1;
+            _quietSub.ThrustMultiplier = 1f;
+            return;
+        }
+        // Legs 2-3: demand far past the thrust cap so the loadout multiplier
+        // binds — stock (x1.0) then overdrive (x1.45), no boost, no quiet.
+        _quietSub.TestDriveWorld = new Vector3(0f, 0f, -80f);
+        _quietSub.TestBoost = false;
+        _quietSub.QuietMode = false;
+        _quietSub.ThrustMultiplier = phase == 3 ? 1.45f : 1f;
     }
 
     // ------------------------------------------------------------- play

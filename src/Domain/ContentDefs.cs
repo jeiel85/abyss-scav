@@ -12,7 +12,7 @@ public static class DomainConstants
     public const string CatalogVersion = "abyss-scav.catalog/1";
 
     /// <summary>Network protocol version for run manifests (docs/16 §5).</summary>
-    public const ushort ProtocolVersion = 1;
+    public const ushort ProtocolVersion = 2;
 
     /// <summary>Ship must be within this range (meters) to salvage loot.</summary>
     public const float InteractRangeMeters = 15f;
@@ -46,6 +46,12 @@ public static class DomainConstants
 
     /// <summary>Base active-pulse cooldown in seconds.</summary>
     public const float PulseBaseCooldownSeconds = 8f;
+
+    /// <summary>Engine power-draw multiplier while boosting (stock; heat sink lowers it).</summary>
+    public const float BoostPowerMult = 1.5f;
+
+    /// <summary>Engine noise multiplier while boosting (stock; heat sink lowers it).</summary>
+    public const float BoostNoiseMult = 1.3f;
 
     /// <summary>
     /// Flat per-run departure cost (credits) used as the docs/05 §4 insurance

@@ -9,9 +9,15 @@ namespace AbyssScav.Presentation;
 /// Signature sonar scope: circular sweep only (no generic cards). Glyphs for
 /// terrain/loot/threat, compact compass strip on top, fading contact history.
 /// Slow continuous sweep; no harsh flicker (alpha fades, nothing blinks).
+/// Colour is never the only cue (docs/07 §3): every contact kind has its own
+/// glyph (salvage diamond, biological triangle, structure square, unknown "?"
+/// ring, terrain dash) and a glyph legend sits under the scope. Colours come
+/// from the selected colour-vision palette; high contrast adds opaque strips,
+/// outlined text, larger outlined glyphs and a heavier rim.
 /// </summary>
 public partial class SonarDisplay : Control
 {
+    private HudTheme _theme = new(SonarPalette.Standard, false);
     private float _sweep;
     private readonly List<Blip> _history = new();
     private string _objectiveText = "--";
@@ -28,9 +34,25 @@ public partial class SonarDisplay : Control
 
     public override void _Ready()
     {
-        CustomMinimumSize = new Vector2(240, 280);
+        CustomMinimumSize = new Vector2(240, 300);
         MouseFilter = MouseFilterEnum.Ignore;
     }
+
+    /// <summary>Palette + contrast mode; call before the first draw (RunHud does on build).</summary>
+    public void ApplyHudTheme(HudTheme theme)
+    {
+        _theme = theme ?? new HudTheme(SonarPalette.Standard, false);
+        QueueRedraw();
+    }
+
+    private static SonarContactKind KindOf(SonarClass cls) => cls switch
+    {
+        SonarClass.Salvage => SonarContactKind.Salvage,
+        SonarClass.Biological => SonarContactKind.Biological,
+        SonarClass.Structure => SonarContactKind.Structure,
+        SonarClass.Unknown => SonarContactKind.Unknown,
+        _ => SonarContactKind.Terrain,
+    };
 
     public override void _Process(double delta)
     {
@@ -109,104 +131,150 @@ public partial class SonarDisplay : Control
 
     public override void _Draw()
     {
-        var ink = new Color("#071622");
-        var cyan = new Color("#71d9d1");
-        var parchment = new Color("#dae4df");
-        var amber = new Color("#dfa44d");
-        var metal = new Color("#29414b");
+        var pal = _theme.Palette;
+        var hc = _theme.HighContrast;
+        var ink = HudTheme.ToColor(pal.ScopeBackground);
+        var accent = _theme.Accent;
+        var text = _theme.Text;
+        var alert = _theme.Alert;
+        var rim = hc ? _theme.PanelBorder : HudTheme.ToColor(pal.Rim);
         var font = ThemeDB.FallbackFont;
+        var bump = hc ? 1 : 0;
 
         var w = Size.X;
         var cx = w * 0.5f;
         var cy = 44f + 100f;
         var radius = 96f;
+        var center = new Vector2(cx, cy);
 
-        // Compass strip.
-        DrawRect(new Rect2(0, 0, w, 30), new Color(0.02f, 0.07f, 0.10f, 0.95f));
-        DrawString(font, new Vector2(8, 20), Localization.T("OBJ") + " " + _objectiveText + "  " + RadToMark(_objectiveBearing), HorizontalAlignment.Left, -1, 13, parchment);
+        // Compass strip (opaque in high contrast so text never sits on the 3D view).
+        DrawRect(new Rect2(0, 0, w, hc ? 48 : 30), hc ? Colors.Black : new Color(0.02f, 0.07f, 0.10f, 0.95f));
+        HudText(font, new Vector2(8, 20), Localization.T("OBJ") + " " + _objectiveText + "  " + RadToMark(_objectiveBearing), 13 + bump, text);
         var extMark = Localization.T("EXT") + " " + RadToMark(_extractBearing);
-        DrawString(font, new Vector2(w - 8 - font.GetStringSize(extMark, HorizontalAlignment.Left, -1, 13).X, 20), extMark, HorizontalAlignment.Left, -1, 13, cyan);
+        HudText(font, new Vector2(w - 8 - font.GetStringSize(extMark, HorizontalAlignment.Left, -1, 13 + bump).X, 20), extMark, 13 + bump, accent);
         if (_nearestThreatRange >= 0f)
         {
             var warn = Localization.T("THREAT {0}m", (object)$"{_nearestThreatRange:F0}") + (_quiet ? Localization.T(" - QUIET") : "");
-            DrawString(font, new Vector2(8, 30 + 12), warn, HorizontalAlignment.Left, -1, 12, amber);
+            HudText(font, new Vector2(8, 42), warn, 12 + bump, alert);
         }
         else if (_quiet)
         {
-            DrawString(font, new Vector2(8, 42), Localization.T("QUIET RUNNING"), HorizontalAlignment.Left, -1, 12, cyan);
+            HudText(font, new Vector2(8, 42), Localization.T("QUIET RUNNING"), 12 + bump, accent);
         }
 
         // Scope body.
-        DrawCircle(new Vector2(cx, cy), radius + 6f, metal);
-        DrawCircle(new Vector2(cx, cy), radius, ink);
-        DrawArc(new Vector2(cx, cy), radius * 0.33f, 0f, MathF.PI * 2f, 48, new Color(cyan, 0.35f), 1f);
-        DrawArc(new Vector2(cx, cy), radius * 0.66f, 0f, MathF.PI * 2f, 48, new Color(cyan, 0.35f), 1f);
-        DrawArc(new Vector2(cx, cy), radius, 0f, MathF.PI * 2f, 64, cyan, 1.5f);
-        DrawLine(new Vector2(cx - radius, cy), new Vector2(cx + radius, cy), new Color(cyan, 0.25f), 1f);
-        DrawLine(new Vector2(cx, cy - radius), new Vector2(cx, cy + radius), new Color(cyan, 0.25f), 1f);
+        DrawCircle(center, radius + 6f, rim);
+        DrawCircle(center, radius, ink);
+        var ringAlpha = hc ? 0.6f : 0.35f;
+        DrawArc(center, radius * 0.33f, 0f, MathF.PI * 2f, 48, new Color(accent, ringAlpha), 1f);
+        DrawArc(center, radius * 0.66f, 0f, MathF.PI * 2f, 48, new Color(accent, ringAlpha), 1f);
+        DrawArc(center, radius, 0f, MathF.PI * 2f, 64, accent, hc ? 3f : 1.5f);
+        DrawLine(new Vector2(cx - radius, cy), new Vector2(cx + radius, cy), new Color(accent, hc ? 0.45f : 0.25f), 1f);
+        DrawLine(new Vector2(cx, cy - radius), new Vector2(cx, cy + radius), new Color(accent, hc ? 0.45f : 0.25f), 1f);
 
         // Sweep: soft wedge + leading line, slow, no strobe.
         var dir = new Vector2(MathF.Sin(_sweep), -MathF.Cos(_sweep));
-        var trail = 0.7f;
-        var pts = new Vector2[] { new Vector2(cx, cy) };
-        var plist = new System.Collections.Generic.List<Vector2>(pts);
+        const float trail = 0.7f;
+        var plist = new List<Vector2> { center };
         for (var i = 0; i <= 12; i++)
         {
             var a = _sweep - trail * i / 12f;
-            plist.Add(new Vector2(cx, cy) + new Vector2(MathF.Sin(a), -MathF.Cos(a)) * radius);
+            plist.Add(center + new Vector2(MathF.Sin(a), -MathF.Cos(a)) * radius);
         }
-        DrawColoredPolygon(plist.ToArray(), new Color(cyan, 0.10f));
-        DrawLine(new Vector2(cx, cy), new Vector2(cx, cy) + dir * radius, new Color(cyan, 0.8f), 1.5f);
+        DrawColoredPolygon(plist.ToArray(), new Color(accent, 0.10f));
+        DrawLine(center, center + dir * radius, new Color(accent, 0.8f), 1.5f);
 
         // Ship wedge at center, pointing scope-up.
         var nose = new Vector2(cx, cy - 7f);
         var bl = new Vector2(cx - 5f, cy + 5f);
         var br = new Vector2(cx + 5f, cy + 5f);
-        DrawColoredPolygon(new Vector2[] { nose, bl, br }, parchment);
+        DrawColoredPolygon(new Vector2[] { nose, bl, br }, text);
 
+        var minAlpha = hc ? 0.45f : 0.25f;
         foreach (var b in _history)
         {
             var fade = 1f - b.Age / 14f;
-            var p = new Vector2(cx, cy) + b.Pos;
-            if ((p - new Vector2(cx, cy)).Length() > radius) continue;
-            var col = b.Class switch
-            {
-                SonarClass.Salvage => parchment,
-                SonarClass.Biological => amber,
-                SonarClass.Structure => cyan,
-                SonarClass.Unknown => new Color(0.6f, 0.6f, 0.65f),
-                _ => new Color(0.45f, 0.55f, 0.55f),
-            };
-            DrawBlip(p, b.Class, new Color(col, 0.25f + 0.75f * fade));
+            var p = center + b.Pos;
+            if ((p - center).Length() > radius) continue;
+            var kind = KindOf(b.Class);
+            var col = HudTheme.ToColor(pal.ContactColor(kind));
+            DrawBlip(font, p, kind, new Color(col, minAlpha + (1f - minAlpha) * fade));
         }
 
-        // Buddy breadcrumb: small steady cyan dots, no motion or flashing.
+        // Buddy breadcrumb: small steady dots, no motion or flashing.
         foreach (var fix in _trailWorld)
         {
-            var p = new Vector2(cx, cy) + ToLocal(fix, _trailShip, _trailHeading, _trailRange);
-            if ((p - new Vector2(cx, cy)).Length() > radius) continue;
-            DrawCircle(p, 2f, new Color(cyan, 0.75f));
+            var p = center + ToLocal(fix, _trailShip, _trailHeading, _trailRange);
+            if ((p - center).Length() > radius) continue;
+            DrawCircle(p, hc ? 2.5f : 2f, new Color(accent, hc ? 1f : 0.75f));
+        }
+
+        DrawLegend(font, w, cy + radius + 6f);    }
+
+    /// <summary>Glyph key under the scope: shape + palette colour + localized kind name.</summary>
+    private void DrawLegend(Font font, float w, float top)
+    {
+        var size = 10 + (_theme.HighContrast ? 1 : 0);
+        var rows = new[]
+        {
+            new[] { (SonarContactKind.Salvage, Localization.T("Salvage")), (SonarContactKind.Biological, Localization.T("Biological")), (SonarContactKind.Structure, Localization.T("Structure")) },
+            new[] { (SonarContactKind.Unknown, Localization.T("Unknown")), (SonarContactKind.Terrain, Localization.T("Terrain")) },
+        };
+        var colWidth = w / 3f;
+        for (var r = 0; r < rows.Length; r++)
+        {
+            var baseline = top + 16f + r * 17f;
+            for (var c = 0; c < rows[r].Length; c++)
+            {
+                var (kind, label) = rows[r][c];
+                var x = c * colWidth + 10f;
+                DrawBlip(font, new Vector2(x, baseline - 4f), kind, HudTheme.ToColor(_theme.Palette.ContactColor(kind)));
+                HudText(font, new Vector2(x + 10f, baseline), label, size, _theme.Text);
+            }
         }
     }
 
-    private void DrawBlip(Vector2 p, SonarClass cls, Color col)
+    /// <summary>HUD string; high contrast adds a dark outline behind the glyphs.</summary>
+    private void HudText(Font font, Vector2 pos, string value, int size, Color color)
     {
-        switch (cls)
+        if (_theme.OutlineSize > 0)
         {
-            case SonarClass.Salvage: // diamond
-                DrawColoredPolygon(new Vector2[] { p + new Vector2(0, -5), p + new Vector2(5, 0), p + new Vector2(0, 5), p + new Vector2(-5, 0) }, col);
+            DrawStringOutline(font, pos, value, HorizontalAlignment.Left, -1, size, _theme.OutlineSize, Colors.Black);
+        }
+        DrawString(font, pos, value, HorizontalAlignment.Left, -1, size, color);
+    }
+
+    private void DrawBlip(Font font, Vector2 p, SonarContactKind kind, Color col)
+    {
+        // High contrast: larger glyphs on a dark halo so they read against the sweep.
+        var hc = _theme.HighContrast;
+        var s = hc ? 1.35f : 1f;
+        if (hc)
+        {
+            DrawGlyph(font, p, kind, new Color(0f, 0f, 0f, col.A), s * 1.45f, 3.5f);
+        }
+        DrawGlyph(font, p, kind, col, s, hc ? 2f : 1.5f);
+    }
+
+    private void DrawGlyph(Font font, Vector2 p, SonarContactKind kind, Color col, float s, float stroke)
+    {
+        switch (kind)
+        {
+            case SonarContactKind.Salvage: // diamond
+                DrawColoredPolygon(new Vector2[] { p + new Vector2(0, -5) * s, p + new Vector2(5, 0) * s, p + new Vector2(0, 5) * s, p + new Vector2(-5, 0) * s }, col);
                 break;
-            case SonarClass.Biological: // triangle
-                DrawColoredPolygon(new Vector2[] { p + new Vector2(0, -6), p + new Vector2(5, 4), p + new Vector2(-5, 4) }, col);
+            case SonarContactKind.Biological: // triangle
+                DrawColoredPolygon(new Vector2[] { p + new Vector2(0, -6) * s, p + new Vector2(5, 4) * s, p + new Vector2(-5, 4) * s }, col);
                 break;
-            case SonarClass.Structure: // square
-                DrawRect(new Rect2(p - new Vector2(4, 4), new Vector2(8, 8)), col);
+            case SonarContactKind.Structure: // square
+                DrawRect(new Rect2(p - new Vector2(4, 4) * s, new Vector2(8, 8) * s), col);
                 break;
-            case SonarClass.Unknown: // hollow
-                DrawArc(p, 4f, 0f, MathF.PI * 2f, 16, col, 1.5f);
+            case SonarContactKind.Unknown: // question ring
+                DrawArc(p, 5f * s, 0f, MathF.PI * 2f, 16, col, stroke);
+                DrawString(font, p + new Vector2(-2.5f, 3.5f) * s, "?", HorizontalAlignment.Left, -1, (int)MathF.Round(9 * s), col);
                 break;
-            default: // terrain dot
-                DrawCircle(p, 2.5f, col);
+            default: // terrain: short dash (line pattern)
+                DrawLine(p - new Vector2(3.5f, 0) * s, p + new Vector2(3.5f, 0) * s, col, stroke + 0.5f);
                 break;
         }
     }

@@ -286,15 +286,23 @@ public partial class ProfileRoundtripTest : Node
                 || Math.Abs(fx.EngineThrustMult - stock.EngineThrustMult) > 0.001f
                 || Math.Abs(fx.MaxHullBonus - stock.MaxHullBonus) > 0.001f
                 || Math.Abs(fx.HullRatingBonus - stock.HullRatingBonus) > 0.001f
-                || Math.Abs(fx.SalvageRangeMeters - stock.SalvageRangeMeters) > 0.001f;
-            Check(differs, "research.sim_effect_numeric", ModuleLoadout.Describe(target.Id));
+                || Math.Abs(fx.SalvageRangeMeters - stock.SalvageRangeMeters) > 0.001f
+                || Math.Abs(fx.TurnTorqueMult - stock.TurnTorqueMult) > 0.001f
+                || Math.Abs(fx.SwayThrustMult - stock.SwayThrustMult) > 0.001f
+                || Math.Abs(fx.BoostPowerMult - stock.BoostPowerMult) > 0.001f
+                || Math.Abs(fx.BoostNoiseMult - stock.BoostNoiseMult) > 0.001f;
             var req = new RunGenerationRequest(4242UL, "biome.shelf_graveyard", "contract.salvage_quota", catalog);
             if (TrenchGenerator.TryGenerate(req, out var world, out var verdict, out _) && world is not null && verdict.IsValid)
             {
-                Check(RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff", null,
-                        RunSimulation.InsuranceNone, out _, out _,
-                        new[] { target.Id }, owned),
-                    "research.sim_create_equipped", target.Id);
+                var created = RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff", null,
+                    RunSimulation.InsuranceNone, out var equipped, out _,
+                    new[] { target.Id }, owned);
+                Check(created, "research.sim_create_equipped", target.Id);
+                // Charge-based modules (buoy / decoy / EMP) carry their effect as
+                // sim charges rather than loadout multipliers.
+                if (created && equipped is not null)
+                    differs |= equipped.BuoyCharges + equipped.DecoyCharges + equipped.EmpCharges > 0;
+                Check(differs, "research.sim_effect_numeric", ModuleLoadout.Describe(target.Id));
                 Check(!RunSimulation.TryCreate(world, catalog, "difficulty.standard", "frame.skiff", null,
                         RunSimulation.InsuranceNone, out _, out _,
                         new[] { target.Id }, new HashSet<string>(StringComparer.Ordinal)),
@@ -302,6 +310,7 @@ public partial class ProfileRoundtripTest : Node
             }
             else
             {
+                Check(differs, "research.sim_effect_numeric", ModuleLoadout.Describe(target.Id));
                 Check(false, "research.sim_world", "could not generate verification world");
             }
         }

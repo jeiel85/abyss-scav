@@ -18,7 +18,7 @@ namespace AbyssScav.Net;
 /// </summary>
 public partial class NetworkSmoke : Node
 {
-    private const string GameVersion = "0.1.0-a01";
+    private const string GameVersion = "0.2.0";
     private const string Catalog = "smoke-catalog-a01";
     private const ulong SessionSeed = 987654321987ul;
     private const int StepTimeoutMs = 20000;

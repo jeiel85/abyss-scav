@@ -122,7 +122,8 @@ public static class LobbyCodecs
         nameBytes.CopyTo(destination[at..]);
         at += nameBytes.Length;
         destination[at++] = (byte)settings.MaxPlayers;
-        destination[at++] = settings.JoinAllowed ? (byte)1 : (byte)0;
+        // Admission bits: 0 = lobby open to joins, 1 = running dive accepts late joiners (v2).
+        destination[at++] = (byte)((settings.JoinAllowed ? 1 : 0) | (settings.JoinInProgress ? 2 : 0));
         destination[at++] = (byte)players.Count;
         for (var i = 0; i < players.Count; i++)
         {
@@ -160,7 +161,7 @@ public static class LobbyCodecs
         var maxPlayers = payload[at++];
         var joinAllowed = payload[at++];
         var count = payload[at++];
-        if (joinAllowed > 1 || count > NetLimits.MaxPeers ||
+        if (joinAllowed > 3 || count > NetLimits.MaxPeers ||
             maxPlayers is < 1 or > NetLimits.MaxPeers || count > maxPlayers)
         {
             return false;
@@ -205,7 +206,7 @@ public static class LobbyCodecs
             return false;
         }
 
-        settings = new LobbySettings(lobbyName, maxPlayers, joinAllowed == 1);
+        settings = new LobbySettings(lobbyName, maxPlayers, (joinAllowed & 1) != 0, (joinAllowed & 2) != 0);
         players = list;
         return true;
     }

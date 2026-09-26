@@ -51,6 +51,14 @@ def extract_dynamic_keys(src):
     return keys
 
 
+def extract_module_descriptions(src):
+    """ModuleLoadout.Describe() texts (shown via Localization.T on the
+    contract/loadout and research screens)."""
+    start = src.index("public static string Describe(")
+    end = src.index("public static string EffectKey(")
+    return {m.group(1) for m in re.finditer(r'=> "((?:[^"\\]|\\.)*)"', src[start:end])}
+
+
 def placeholder_specs(s):
     """Set of (index, format-specifier) tuples, e.g. {('0', ':F0')}."""
     return set(re.findall(r"\{(\d+)(:[^}]*)?\}", s))
@@ -65,6 +73,8 @@ def main():
 
     sim_src = (ROOT / "src" / "Domain" / "RunSimulation.cs").read_text(encoding="utf-8")
     dynamic = extract_dynamic_keys(sim_src)
+    loadout_src = (ROOT / "src" / "Domain" / "ModuleLoadout.cs").read_text(encoding="utf-8")
+    dynamic |= extract_module_descriptions(loadout_src)
 
     errors = []
     for k in sorted(k for k in (static | dynamic) if k not in ko):

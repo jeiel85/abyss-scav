@@ -24,6 +24,8 @@ internal static class CoopSyncTests
             ("world_snapshot_converges_client", SnapshotConverges),
             ("snapshot_phase_failure_applied", SnapshotPhaseFailure),
             ("snapshot_world_mismatch_rejected", SnapshotMismatch),
+            ("replicated_attack_far_away_does_not_strike", ReplicatedAttackFarAway),
+            ("replicated_attack_in_reach_strikes", ReplicatedAttackInReach),
         };
 
         var fail = 0;
@@ -183,5 +185,64 @@ internal static class CoopSyncTests
         var corrupt = snap with { Creatures = snap.Creatures.Take(Math.Max(0, snap.Creatures.Count - 1)).ToList() };
         TestAssert.False(client.ApplyWorldSnapshot(corrupt), "divergent snapshot refused");
         TestAssert.Equal(RunPhase.Active, client.Phase, "client state untouched");
+    }
+
+    /// <summary>
+    /// A creature the host reports in Attack (striking a teammate far away)
+    /// must not damage the client's distant hull when the client sim ticks.
+    /// </summary>
+    private static void ReplicatedAttackFarAway()
+    {
+        var (host, client, _, catalog) = Twins("contract.blackbox_recovery", DomainSetup.FirstBiome(DomainSetup.Catalog(), "contract.blackbox_recovery"));
+        var index = DamagingCreatureIndex(client, catalog);
+        var creature = client.CreatureStates[index];
+        // Park the client 500 m from the creature (well past any attack reach).
+        DomainSetup.Teleport(client, creature.Position + new Vector3(500f, 0f, 0f));
+        DomainSetup.Wait(client, 0.1f);
+        var snap = AttackSnapshot(host, index);
+        TestAssert.True(client.ApplyWorldSnapshot(snap), "applied");
+        TestAssert.Equal(RunPhase.Active, client.Phase, "client run active");
+        TestAssert.Equal(CreatureState.Attack, client.CreatureStates[index].State, "creature mirrored in Attack");
+        var hullBefore = client.HullIntegrity;
+        client.Tick(0.1f, client.ShipPosition, DomainSetup.Idle);
+        TestAssert.Equal(hullBefore, client.HullIntegrity, "distant hull untouched by a replicated strike");
+        TestAssert.False(client.RecentEvents.Any(e => e.Kind == "creature.strike"), "no strike event for a distant hull");
+    }
+
+    /// <summary>The same replicated Attack still lands when the client's own sub is in reach.</summary>
+    private static void ReplicatedAttackInReach()
+    {
+        var (host, client, _, catalog) = Twins("contract.blackbox_recovery", DomainSetup.FirstBiome(DomainSetup.Catalog(), "contract.blackbox_recovery"));
+        var index = DamagingCreatureIndex(client, catalog);
+        var snap = AttackSnapshot(host, index);
+        var wire = snap.Creatures[index];
+        DomainSetup.Teleport(client, new Vector3(wire.X, wire.Y, wire.Z));
+        DomainSetup.Wait(client, 0.1f);
+        TestAssert.True(client.ApplyWorldSnapshot(snap), "applied");
+        TestAssert.Equal(RunPhase.Active, client.Phase, "client run active");
+        TestAssert.Equal(CreatureState.Attack, client.CreatureStates[index].State, "creature mirrored in Attack");
+        var hullBefore = client.HullIntegrity;
+        client.Tick(0.1f, client.ShipPosition, DomainSetup.Idle);
+        TestAssert.True(client.HullIntegrity < hullBefore, $"strike landed in reach: {hullBefore:F0} -> {client.HullIntegrity:F0}");
+    }
+
+    /// <summary>First creature whose strike actually deals hull damage (chorus colonies deal none).</summary>
+    private static int DamagingCreatureIndex(RunSimulation sim, ContentCatalog catalog)
+    {
+        for (var i = 0; i < sim.CreatureStates.Count; i++)
+        {
+            if (catalog.Creatures.TryGetValue(sim.CreatureStates[i].CreatureId, out var def) && def.AttackDamage > 0f)
+                return i;
+        }
+
+        throw new InvalidOperationException("test world has no damaging creature");
+    }
+
+    private static WorldStateSnapshot AttackSnapshot(RunSimulation host, int index)
+    {
+        var snap = host.BuildWorldStateSnapshot();
+        var creatures = snap.Creatures.ToList();
+        creatures[index] = creatures[index] with { State = (byte)CreatureState.Attack, StateTime = 0f, StunnedSeconds = 0f };
+        return snap with { Creatures = creatures };
     }
 }
