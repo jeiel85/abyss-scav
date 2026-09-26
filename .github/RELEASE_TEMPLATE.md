@@ -2,7 +2,7 @@
 
 ## Build
 - Windows x64 portable ZIP
-- Protocol version: 1
+- Protocol version: 2
 - Save schema: 1
 
 ## Highlights

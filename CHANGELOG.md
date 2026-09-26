@@ -4,7 +4,7 @@ All notable changes to AbyssScav will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-24
 
 ### Added
 - **Modules 24/24**: Vector Fin (yaw/pitch torque x1.4, sway thrust x1.3) and Heat Sink (boost power draw x1.5 → x1.2, boost noise x1.3 → x1.1) now have real in-run effects and are purchasable/equippable.

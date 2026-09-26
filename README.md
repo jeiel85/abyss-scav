@@ -2,7 +2,7 @@
 
 Dark industrial submarine salvage — pilot a deep-sea submersible, hunt contracts in the abyss, and get back alive.
 
-**Version:** 0.1.0-a01 · **Engine:** Godot 4.7.2 stable (.NET / C#) · **Target:** Windows 10/11
+**Version:** 0.2.0 · **Engine:** Godot 4.7.2 stable (.NET / C#) · **Target:** Windows 10/11
 
 ## Current State
 
@@ -46,7 +46,7 @@ Requires Godot 4.7.2 stable Mono. The batch file points at a local Godot binary 
 ```bat
 python tools/package_windows.py
 ```
-Produces `dist/AbyssScav-v0.1.0-a01-win-x64.zip` plus a SHA-256 manifest. Extract to a normal folder and run `AbyssScav.exe` (never run inside the archive).
+Produces `dist/AbyssScav-v0.2.0-win-x64.zip` plus a SHA-256 manifest. Extract to a normal folder and run `AbyssScav.exe` (never run inside the archive).
 
 ### Run all tests
 ```bat
